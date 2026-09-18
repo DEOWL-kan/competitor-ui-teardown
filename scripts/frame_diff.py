@@ -119,6 +119,9 @@ def main():
     ap.add_argument("--quiet-threshold", type=float, default=0.1,
                     help="delta at or below this counts as static (default 0.1)")
     ap.add_argument("--no-plot", action="store_true", help="skip the ascii bars")
+    ap.add_argument("--res", default="108x120",
+                    help="analysis resolution (default 108x120). Raise it for subtle motion — "
+                         "see the warning printed when a run looks static.")
     a = ap.parse_args()
 
     require_ffmpeg()
@@ -130,7 +133,7 @@ def main():
         print("  TIP: pass --crop to exclude fixed UI (buttons/status bar) —")
         print("       otherwise a blinking clock shows up as 'motion'.")
 
-    sw, sh = 108, 120
+    sw, sh = (int(v) for v in a.res.lower().split("x"))
     frames = sample(a.video, a.fps, a.crop, sw, sh)
     n = sw * sh
     diffs = []
@@ -167,6 +170,17 @@ def main():
         print(f"  cycle length:    mean {statistics.mean(cycles):.2f}s  {['%.2f' % c for c in cycles]}")
 
     print(f"\n  peak delta {peak:.2f}   mean {statistics.mean(v for _, v in diffs):.2f}")
+
+    # Subtle motion is easy to destroy by downsampling: a 3px float on a 1080px
+    # wide capture becomes 0.3px at 108px wide and gets interpolated away. If the
+    # result looks static, say so rather than letting "no motion" stand unchallenged.
+    if peak < 0.5:
+        src_w = int(info.get("width") or 0)
+        print(f"\n  ⚠️  Peak delta is very low at {sw}x{sh} analysis resolution.")
+        if src_w and src_w // sw >= 4:
+            print(f"      Source is {src_w}px wide, downsampled {src_w//sw}x — sub-pixel motion")
+            print(f"      (a few px of drift, a slow breath) would be smoothed out entirely.")
+        print(f"      Before concluding 'static', re-run with --res 270x300 (or higher).")
     print("\n## How to read this")
     print("  Sample frames AT the quiet points and AT the peaks, then look at them:")
     print("    quiet point sharp + peak shows two images ghosted  => crossfade")

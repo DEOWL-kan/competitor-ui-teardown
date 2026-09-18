@@ -107,6 +107,35 @@ distilled from — attributing an onboarding video to a login screen (twice), es
 from 1 fps samples, inferring texture from file size, painting a competitor's product details onto your own
 product's spec sheet. The scripts exist mostly to make those specific mistakes harder to repeat.
 
+## Known limitations
+
+Stated plainly, because a teardown tool that overstates its own reach is the worst kind:
+
+**Android only.** iOS packages cannot be pulled from a non-jailbroken device, so the asset-inventory
+half of this simply does not apply there. Plenty of design-leading apps are iOS-first. For those you
+are limited to screen recordings (`frame_diff.py`) and screenshots (`image_probe.py`) — still useful,
+but you lose the single most decisive step.
+
+**Distilled from one investigation.** The workflow and every pitfall come from one real teardown. They
+proved out there; they have not yet been stress-tested across many apps. Expect the screen-bucket
+regexes in `apk_assets.py` to miss on apps with obfuscated or idiosyncratic asset naming.
+
+**Subtle motion needs a higher analysis resolution.** `frame_diff.py` downsamples before differencing.
+A 3px drift on a 1080px capture is 0.3px at the default resolution and gets smoothed away — the script
+now warns and tells you to raise `--res`, but it cannot detect what it never resolved.
+
+**Contrast is measured against whole-image extremes.** `image_probe.py --contrast` compares your text
+colour to the lightest and darkest pixels anywhere in the image. If your text only ever sits in one
+region, that is pessimistic. And if any scrim or overlay sits between text and background, none of
+these numbers are the shipping values — you have to recompute on composited pixels.
+
+**Split APKs aren't handled.** The script reads one package file. Most of the time resources live in
+`base.apk` and that is enough; occasionally they don't.
+
+**Getting from teardown to your own design is still on you.** The skill produces a specification of how
+someone else did it. Deciding what of that applies to your product, brand and constraints — and what
+should be deliberately different — is judgement the tooling does not supply.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

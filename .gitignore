@@ -1,0 +1,8 @@
+# 竞品素材与中间产物一律不入库
+out/
+probe/
+*.apk
+*.raw
+*.mp4
+__pycache__/
+.DS_Store

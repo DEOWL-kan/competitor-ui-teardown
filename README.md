@@ -1,0 +1,165 @@
+# competitor-ui-teardown
+
+**Reverse-engineer how a competitor's screen is actually built, and get specs you can hand to a designer.**
+
+A [Claude Code](https://claude.com/claude-code) skill (also usable standalone — the scripts are plain Python).
+
+[中文说明](#中文) ·  MIT
+
+---
+
+## The problem
+
+You see a screen in a competitor's app that looks expensive, and you want to know why.
+
+Looking at it gets you "it uses a big photo and soft light" — which nobody can build from. Worse, **it's
+usually wrong**. A 2.7-second eased crossfade reads to the human eye as "changes every 2.5 seconds with a
+0.6-second fade". That is a 4× error, and it went straight into a design document before anyone measured it.
+
+This skill measures instead of guessing:
+
+| Question | How it's answered |
+|---|---|
+| Is that background a video, a Lottie file, or five JPEGs? | Read the app package's asset inventory |
+| How long is that transition, and what's its easing curve? | Per-frame difference over a screen recording |
+| Does that gradient have grain, or can I just draw it in code? | Neighbour-pixel delta statistics |
+| Where is the light actually centred? | Chroma peak on a downsampled grid |
+| Will my text still pass contrast on it? | WCAG contrast against the measured extremes |
+
+Anything that can't be measured gets labelled as inference. That distinction is the point.
+
+## What's in here
+
+```
+SKILL.md                  The workflow
+references/pitfalls.md    Eight ways this goes wrong, all of them observed in practice
+references/android.md     Device + package commands
+scripts/apk_assets.py     Asset inventory, grouped by screen
+scripts/frame_diff.py     Motion rhythm from a screen recording
+scripts/image_probe.py    Grain / gradient structure / colour / contrast
+```
+
+Requirements: Python 3.8+ (standard library only), `ffmpeg` and `ffprobe` on PATH,
+plus `adb` if you're working with Android devices.
+
+## Use it as a Claude Code skill
+
+```bash
+git clone https://github.com/DEOWL-kan/competitor-ui-teardown.git
+ln -s "$PWD/competitor-ui-teardown" ~/.claude/skills/competitor-ui-teardown
+```
+
+Then just ask, in whatever words come naturally:
+
+> analyse how XYZ builds their login screen — ours feels cheap next to it
+
+## Use the scripts directly
+
+```bash
+# What is this screen made of?
+python3 scripts/apk_assets.py app.apk --screen login
+
+# How does that animation actually behave?
+python3 scripts/frame_diff.py recording.mp4 --crop 1080x1200+0+200
+
+# How was this background made, and is my text readable on it?
+python3 scripts/image_probe.py bg.png --grid 9x20 --contrast '#1E2C28,#5C756F'
+```
+
+### A real result
+
+`apk_assets.py`, pointed at one shipping app, replaced several rounds of guesswork with one line of output:
+
+```
+## login  (12 assets over 20 KB)
+     311 KB  image      .../assets/images/login/bg_loop_2.jpg
+     307 KB  image      .../assets/images/login/bg_loop_1.jpg
+     ...
+  => login is STATIC IMAGES (7 loop-ish files) — almost certainly a crossfade,
+     not a video. Measure the rhythm with frame_diff.py.
+```
+
+That background had been assumed to be video. It is five JPEGs and a crossfade, totalling about 1.2 MB.
+Knowing that changes the entire production plan.
+
+## Boundaries
+
+This is for understanding **mechanisms**, so you can build your own thing better. It is not for taking
+anyone's work.
+
+| | |
+|---|---|
+| Analysing timings, colours, structure, asset types | ✅ |
+| Turning findings into your own specs and rebuilding | ✅ |
+| Screenshots and frames for analysis and comparison | ✅ label them |
+| Downloading an app package | ⚠️ **ask the user first** |
+| Shipping a competitor's assets in your product | ⛔ never |
+| Committing competitor assets to your repo | ⛔ never |
+| Bypassing paywalls, patching clients, circumventing DRM | ⛔ never — this reads publicly distributed packages only |
+
+The skill asks for authorisation before downloading anything, and never drives an app-store account on the
+user's behalf.
+
+## Why the pitfalls file is the most useful part
+
+Every entry in `references/pitfalls.md` is a mistake that actually happened during the work this skill was
+distilled from — attributing an onboarding video to a login screen (twice), estimating animation timing
+from 1 fps samples, inferring texture from file size, painting a competitor's product details onto your own
+product's spec sheet. The scripts exist mostly to make those specific mistakes harder to repeat.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
+
+---
+
+<a name="中文"></a>
+
+# 中文
+
+**逆向拆解竞品某一屏是怎么做出来的，产出能直接照着做的规格。**
+
+## 解决什么问题
+
+看到竞品某屏很好看，想知道怎么做的。凭肉眼看只能得出「用了大图和柔和的光」这种没法落地的结论，
+而且**大概率是错的** —— 一个 2.7 秒的缓动交叉溶解，肉眼会读成「每 2.5 秒换一张，淡化 0.6 秒」，
+差了四倍多，而这个错误结论已经写进过交付文档。
+
+本项目的做法是：**能测的一律测，不能测的标明是推断**。
+
+| 想知道 | 怎么测 |
+|---|---|
+| 背景是视频、Lottie 还是几张静态图 | 读安装包的资源清单 |
+| 过渡多长、曲线什么形状 | 录屏逐帧差分 |
+| 渐变有没有颗粒、能不能纯代码画 | 相邻像素差统计 |
+| 光斑中心在哪 | 降采样网格上的色度峰值 |
+| 文字放上去对比度够不够 | 对实测极值做 WCAG 计算 |
+
+## 安装
+
+```bash
+git clone https://github.com/DEOWL-kan/competitor-ui-teardown.git
+ln -s "$PWD/competitor-ui-teardown" ~/.claude/skills/competitor-ui-teardown
+```
+
+然后直接说人话就行：
+
+> 分析一下 XX 的登录页是怎么做的，我们的比它差太多
+
+## 边界
+
+本项目用于理解**实现机制**，从而把自己的东西做得更好，**不是**用来拿别人的成果。
+
+下载安装包前会**先征求授权**；⛔ 不会替用户操作应用商店账号；
+⛔ 不提取竞品素材用于我方产品，也不把竞品素材提交进仓库。
+
+## 最有价值的部分是踩坑清单
+
+`references/pitfalls.md` 里的每一条都是真实发生过的错误 ——
+把引导页的视频当成登录页方案（犯了两次）、从 1fps 抽帧估读动效节奏、
+用文件体积推断有没有颗粒、把竞品的产品特征画进自家的规格表。
+那三个脚本存在的主要意义，就是让这些具体的错误更难重犯。
+
+## 许可
+
+MIT

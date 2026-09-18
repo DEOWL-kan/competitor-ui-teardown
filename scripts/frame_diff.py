@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+"""Measure the actual rhythm of an animated screen from a screen recording.
+
+Eyeballing a few sampled frames gives you the wrong answer — you will read a
+2.7s ease-in-out crossfade as "changes every 2.5s with a 0.6s fade". This
+computes per-frame difference over a region of interest and reports where
+motion actually starts, peaks and stops.
+
+Shape of the curve matters as much as the timing:
+  - bell curve (slow -> fast -> slow)  = eased crossfade or eased camera move
+  - plateau                            = linear transition
+  - spike                              = hard cut
+  - low but never zero                 = continuous motion (Ken Burns, video)
+  - dead flat at zero                  = genuinely static
+
+Requires ffmpeg/ffprobe. stdlib-only otherwise.
+
+Usage:
+    frame_diff.py rec.mp4
+    frame_diff.py rec.mp4 --crop 1080x1200+0+200   # WxH+X+Y, exclude fixed UI
+    frame_diff.py rec.mp4 --fps 20 --quiet-threshold 0.1
+"""
+import argparse
+import os
+import statistics
+import subprocess
+import sys
+import tempfile
+
+
+def _run(cmd):
+    p = subprocess.run(cmd, capture_output=True, text=True)
+    if p.returncode != 0:
+        sys.exit(f"command failed: {' '.join(cmd)}\n{p.stderr.strip()}")
+    return p.stdout.strip()
+
+
+def require_ffmpeg():
+    for tool in ("ffmpeg", "ffprobe"):
+        if subprocess.run(["which", tool], capture_output=True).returncode != 0:
+            sys.exit(f"{tool} not found on PATH. Install ffmpeg first.")
+
+
+def probe(path):
+    out = _run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+                "-show_entries", "stream=width,height,duration,nb_frames",
+                "-of", "default=nw=1", path])
+    d = {}
+    for line in out.splitlines():
+        k, _, v = line.partition("=")
+        d[k] = v
+    return d
+
+
+def sample(path, fps, crop, sw, sh):
+    filters = []
+    if crop:
+        wh, _, xy = crop.partition("+")
+        w, h = wh.lower().split("x")
+        x, y = (xy.split("+") + ["0", "0"])[:2] if xy else ("0", "0")
+        filters.append(f"crop={w}:{h}:{x}:{y}")
+    filters += [f"fps={fps}", f"scale={sw}:{sh}", "format=gray"]
+    with tempfile.NamedTemporaryFile(suffix=".raw", delete=False) as f:
+        tmp = f.name
+    _run(["ffmpeg", "-loglevel", "error", "-i", path, "-vf", ",".join(filters),
+          "-f", "rawvideo", "-pix_fmt", "gray", tmp, "-y"])
+    data = open(tmp, "rb").read()
+    os.unlink(tmp)
+    n = sw * sh
+    return [data[i * n:(i + 1) * n] for i in range(len(data) // n)]
+
+
+def segments(diffs, fps, quiet, min_run=None):
+    """Split the timeline into quiet and moving runs.
+
+    Runs shorter than `min_run` are absorbed into their neighbour. Without this,
+    a single sample grazing the threshold splits one 2.9s transition into
+    move/quiet/move and the cycle estimate collapses to nonsense (a real run
+    produced a bogus 0.15s "cycle" this way).
+
+    `min_run` defaults to two sampling intervals, not a fixed duration. That
+    matters: real static holds can be as short as 0.10s (measured on a shipping
+    app), so a hard-coded 0.2s floor eats the very segments you are trying to
+    find and reports the whole clip as one continuous move.
+    """
+    if min_run is None:
+        min_run = 2.0 / fps
+    runs, cur, start = [], None, 0.0
+    for t, v in diffs:
+        state = "quiet" if v <= quiet else "move"
+        if cur is None:
+            cur, start = state, t
+        elif state != cur:
+            runs.append((cur, start, t))
+            cur, start = state, t
+    if cur is not None:
+        runs.append((cur, start, diffs[-1][0]))
+
+    merged = []
+    for run in runs:
+        kind, s, e = run
+        if merged and (e - s) < min_run:
+            pk, ps, _ = merged[-1]
+            merged[-1] = (pk, ps, e)          # absorb into the previous run
+        elif merged and merged[-1][0] == kind:
+            pk, ps, _ = merged[-1]
+            merged[-1] = (pk, ps, e)          # same state, join them up
+        else:
+            merged.append(run)
+    return merged
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("video")
+    ap.add_argument("--fps", type=float, default=20, help="sampling rate (default 20)")
+    ap.add_argument("--crop", help="WxH+X+Y — crop to the animated region, excluding fixed UI")
+    ap.add_argument("--quiet-threshold", type=float, default=0.1,
+                    help="delta at or below this counts as static (default 0.1)")
+    ap.add_argument("--no-plot", action="store_true", help="skip the ascii bars")
+    a = ap.parse_args()
+
+    require_ffmpeg()
+    info = probe(a.video)
+    print(f"# {os.path.basename(a.video)}")
+    print(f"  {info.get('width')}x{info.get('height')}  "
+          f"{float(info.get('duration', 0)):.2f}s  {info.get('nb_frames')} frames")
+    if not a.crop:
+        print("  TIP: pass --crop to exclude fixed UI (buttons/status bar) —")
+        print("       otherwise a blinking clock shows up as 'motion'.")
+
+    sw, sh = 108, 120
+    frames = sample(a.video, a.fps, a.crop, sw, sh)
+    n = sw * sh
+    diffs = []
+    for i in range(1, len(frames)):
+        prev, cur = frames[i - 1], frames[i]
+        s = sum(abs(cur[j] - prev[j]) for j in range(n)) / n
+        diffs.append((i / a.fps, s))
+    if not diffs:
+        sys.exit("not enough frames sampled")
+
+    peak = max(v for _, v in diffs)
+    if not a.no_plot:
+        print(f"\n## Per-frame delta (sampled at {a.fps} fps)")
+        for t, v in diffs:
+            bar = "#" * int(v / max(peak, 0.001) * 46)
+            print(f"  {t:6.2f}  {v:6.2f}  {bar}")
+
+    runs = segments(diffs, a.fps, a.quiet_threshold)
+    quiet = [(s, e) for k, s, e in runs if k == "quiet"]
+    moves = [(s, e) for k, s, e in runs if k == "move"]
+    print(f"\n## Segments (quiet = delta <= {a.quiet_threshold})")
+    for kind, s, e in runs:
+        print(f"  {kind:<5} {s:6.2f} -> {e:6.2f}   ({e - s:.2f}s)")
+
+    if quiet:
+        qd = [e - s for s, e in quiet]
+        print(f"\n  static segments: {len(quiet)}, mean {statistics.mean(qd):.2f}s")
+    if moves:
+        md = [e - s for s, e in moves]
+        print(f"  moving segments: {len(moves)}, mean {statistics.mean(md):.2f}s")
+    if len(quiet) >= 2:
+        starts = [s for s, _ in quiet]
+        cycles = [b - a_ for a_, b in zip(starts, starts[1:])]
+        print(f"  cycle length:    mean {statistics.mean(cycles):.2f}s  {['%.2f' % c for c in cycles]}")
+
+    print(f"\n  peak delta {peak:.2f}   mean {statistics.mean(v for _, v in diffs):.2f}")
+    print("\n## How to read this")
+    print("  Sample frames AT the quiet points and AT the peaks, then look at them:")
+    print("    quiet point sharp + peak shows two images ghosted  => crossfade")
+    print("    every frame sharp, content shifting                => camera move / video")
+    print("  Do not report a rhythm you only inferred from the numbers — confirm visually.")
+
+
+if __name__ == "__main__":
+    main()

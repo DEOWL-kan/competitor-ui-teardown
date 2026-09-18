@@ -124,7 +124,12 @@ def grid_report(path, gw, gh):
 
 
 def saturation_peak(data, gw, gh):
-    """Locate the cell with the strongest colour — that is where the light sits.
+    """Locate the cell with the strongest colour — the chroma peak.
+
+    On a dark background that cell IS the light source. On a light background it
+    is the deepest tint, which is the opposite end of the ramp — measured on a
+    white-to-pale-blue sign-in background, the peak sat on the darkest blue.
+    So report it as "chroma peak" and let the caller say which it is.
 
     Uses chroma (max channel - min channel), NOT HLS saturation. HLS saturation
     blows up near white: a near-white pixel with a faint tint reports ~79%
@@ -141,6 +146,33 @@ def saturation_peak(data, gw, gh):
             if best is None or chroma > best[0]:
                 best = (chroma, x, y, hexof(r, g, b))
     return best
+
+
+def background_extremes(cells):
+    """Darkest/lightest of the background, ignoring foreground marks.
+
+    p10/p90, not min/max. On a screenshot the darkest cell is the body text
+    itself: measured on a real sign-in screen, min was the black headline
+    (L=0.009) while p10 was L=0.236 — so #111111 text got scored against
+    #16181A text and "FAILED" contrast against itself. Returns
+    (darkest, lightest, absolute_darkest, absolute_lightest).
+    """
+    cells = sorted(cells, key=luminance)
+    return cells[len(cells) // 10], cells[len(cells) * 9 // 10], cells[0], cells[-1]
+
+
+def peak_role(peak_hex, cells):
+    """Is the chroma peak the light source, or the far end of the ramp?
+
+    On a dark background the most colourful cell IS the glow. On a light
+    background it is the deepest tint — the opposite end. Decided by comparing
+    it to the image average, not assumed.
+    """
+    mean_l = statistics.mean(luminance(c) for c in cells)
+    if luminance(peak_hex) > mean_l:
+        return "light source / glow — brighter than the image average"
+    return ("deepest tint, darker than the image average — on a light "
+            "background this is the FAR END of the ramp, not the light")
 
 
 def main():
@@ -178,8 +210,11 @@ def main():
         peak = saturation_peak(small, gw, gh)
         if peak:
             c, x, y, hx = peak
-            print(f"\n  light centre: x={x}/{gw-1} ({x/(gw-1)*100:.0f}%), "
+            role = peak_role(hx, [hexof(small[i], small[i+1], small[i+2])
+                                  for i in range(0, gw * gh * 3, 3)])
+            print(f"\n  chroma peak: x={x}/{gw-1} ({x/(gw-1)*100:.0f}%), "
                   f"y={y}/{gh-1} ({y/(gh-1)*100:.0f}%)  {hx}  chroma={c}")
+            print(f"  => {role}")
             print("  (edge-hugging + vertically offset reads as 'light'; centred reads as 'CSS')")
         corners = {"top-left": (0, 0), "top-right": (gw-1, 0),
                    "bottom-left": (0, gh-1), "bottom-right": (gw-1, gh-1),
@@ -197,12 +232,12 @@ def main():
                 print(f"  {nm:<13} H{hh*360:6.1f}  S{ss*100:5.1f}  L{ll*100:5.1f}")
 
         if a.contrast:
-            extremes = sorted({hexof(small[(y*gw+x)*3], small[(y*gw+x)*3+1], small[(y*gw+x)*3+2])
-                               for y in range(gh) for x in range(gw)},
-                              key=luminance)
-            darkest, lightest = extremes[0], extremes[-1]
+            cells = [hexof(small[(y*gw+x)*3], small[(y*gw+x)*3+1], small[(y*gw+x)*3+2])
+                     for y in range(gh) for x in range(gw)]
+            darkest, lightest, abs_d, abs_l = background_extremes(cells)
             print(f"\n## Contrast (WCAG; body text needs >= 4.5, large/non-text >= 3.0)")
-            print(f"  背景极值: darkest {darkest}  lightest {lightest}")
+            print(f"  背景极值 (p10/p90): darkest {darkest}  lightest {lightest}")
+            print(f"  绝对极值 (incl. text/logo pixels): {abs_d} .. {abs_l}")
             for fg in [c.strip() for c in a.contrast.split(",")]:
                 cd, cl = contrast(fg, darkest), contrast(fg, lightest)
                 worst = min(cd, cl)
@@ -210,6 +245,7 @@ def main():
                 print(f"  {fg}  on darkest {cd:5.2f} | on lightest {cl:5.2f} | worst {worst:5.2f}  {mark}")
             print("  Reminder: if any overlay/scrim sits between text and this background,")
             print("  these numbers are NOT the shipping values — recompute on composited pixels.")
+            print("  Best input is the extracted background asset, not a screenshot with text on it.")
 
 
 if __name__ == "__main__":

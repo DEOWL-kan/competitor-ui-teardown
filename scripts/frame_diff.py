@@ -110,6 +110,66 @@ def segments(diffs, fps, quiet, min_run=None):
     return merged
 
 
+def suggest_crop(frames, sw, sh, src_w, src_h):
+    """Find the region that actually moves, so you don't have to measure it by hand.
+
+    Per cell, the range (max - min) over the whole clip. Cells that never change
+    are fixed UI — status bar, buttons, the card behind everything. The bounding
+    box of the cells that do change is the region worth analysing.
+
+    Returns (w, h, x, y) in SOURCE pixels, or None if nothing moved.
+
+    ponytail: a bounding box, not a mask. Two separate animated corners give one
+    box covering both (and the dead middle with them). Good enough to replace
+    eyeballing coordinates off a screenshot; split it by hand if that bites.
+    """
+    if len(frames) < 2:
+        return None
+    n = sw * sh
+    ranges = []
+    for i in range(n):
+        lo = hi = frames[0][i]
+        for f in frames[1:]:
+            v = f[i]
+            if v < lo:
+                lo = v
+            elif v > hi:
+                hi = v
+        ranges.append(hi - lo)
+
+    peak = max(ranges)
+    if peak < 8:                       # 8/255 — below this it is encoder noise
+        return None
+    # Relative floor: keeps a faint-but-real animation, drops compression fizz
+    # around high-contrast text. Absolute floor stops a dead-still clip from
+    # promoting its own noise to "the animated region".
+    floor = max(8, peak * 0.15)
+    xs = [i % sw for i, r in enumerate(ranges) if r >= floor]
+    ys = [i // sw for i, r in enumerate(ranges) if r >= floor]
+    if not xs:
+        return None
+
+    cw, ch = src_w / sw, src_h / sh
+    x0, x1 = int(min(xs) * cw), int((max(xs) + 1) * cw)
+    y0, y1 = int(min(ys) * ch), int((max(ys) + 1) * ch)
+    return x1 - x0, y1 - y0, x0, y0
+
+
+def loop_verdict(cycles):
+    """Do the gaps between static holds actually repeat?
+
+    Printing a "cycle length" whenever there are two static segments turned a
+    one-shot launch sequence (splash -> hold -> cut -> settle) into
+    "cycle length: mean 1.60s ['2.05','1.15']" — a confident number describing
+    a loop that does not exist. Returns "loop", "one-gap" or "not-a-loop".
+    """
+    if len(cycles) < 2:
+        return "one-gap"
+    mean_c = statistics.mean(cycles)
+    spread = (max(cycles) - min(cycles)) / mean_c if mean_c else 1.0
+    return "not-a-loop" if spread > 0.35 else "loop"
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -119,6 +179,8 @@ def main():
     ap.add_argument("--quiet-threshold", type=float, default=0.1,
                     help="delta at or below this counts as static (default 0.1)")
     ap.add_argument("--no-plot", action="store_true", help="skip the ascii bars")
+    ap.add_argument("--suggest-crop", action="store_true",
+                    help="report the region that actually moves, as a --crop argument")
     ap.add_argument("--res", default="108x120",
                     help="analysis resolution (default 108x120). Raise it for subtle motion — "
                          "see the warning printed when a run looks static.")
@@ -127,14 +189,17 @@ def main():
     require_ffmpeg()
     info = probe(a.video)
     print(f"# {os.path.basename(a.video)}")
+    # nb_frames is NOT trustworthy here: `adb shell screenrecord` writes an mp4
+    # whose header claims 5 frames for a 75-frame clip. Report what we sampled.
     print(f"  {info.get('width')}x{info.get('height')}  "
-          f"{float(info.get('duration', 0)):.2f}s  {info.get('nb_frames')} frames")
+          f"{float(info.get('duration', 0)):.2f}s")
     if not a.crop:
         print("  TIP: pass --crop to exclude fixed UI (buttons/status bar) —")
         print("       otherwise a blinking clock shows up as 'motion'.")
 
     sw, sh = (int(v) for v in a.res.lower().split("x"))
     frames = sample(a.video, a.fps, a.crop, sw, sh)
+    print(f"  {len(frames)} frames sampled at {a.fps} fps, analysed at {sw}x{sh}")
     n = sw * sh
     diffs = []
     for i in range(1, len(frames)):
@@ -143,6 +208,29 @@ def main():
         diffs.append((i / a.fps, s))
     if not diffs:
         sys.exit("not enough frames sampled")
+
+    if a.suggest_crop:
+        box = suggest_crop(frames, sw, sh, int(info.get("width") or 0),
+                           int(info.get("height") or 0))
+        print("\n## Suggested crop")
+        if box:
+            w, h, x, y = box
+            src_w, src_h = int(info.get("width") or 0), int(info.get("height") or 0)
+            print(f"  --crop {w}x{h}+{x}+{y}")
+            if src_h and y + h <= src_h * 0.06 and w * h < src_w * src_h * 0.02:
+                # Measured: a 16.8s recording of a completely static screen
+                # suggested 30x20+850+60 — the charging indicator.
+                print("  ⚠️  that box is a sliver in the status bar — almost certainly the")
+                print("      clock/battery, not the app. Treat this screen as STATIC, and")
+                print("      crop the status bar OUT rather than cropping to this.")
+            elif src_w and w * h > src_w * src_h * 0.9:
+                print("  ⚠️  that is essentially the whole frame — the clip probably contains a")
+                print("      screen transition. Cut to one screen first, then re-run.")
+            else:
+                print("  (bounding box of every cell that changed; widen it if the motion you")
+                print("   care about is faint, and confirm against a frame before trusting it)")
+        else:
+            print("  nothing moved — no crop to suggest.")
 
     peak = max(v for _, v in diffs)
     if not a.no_plot:
@@ -167,7 +255,18 @@ def main():
     if len(quiet) >= 2:
         starts = [s for s, _ in quiet]
         cycles = [b - a_ for a_, b in zip(starts, starts[1:])]
-        print(f"  cycle length:    mean {statistics.mean(cycles):.2f}s  {['%.2f' % c for c in cycles]}")
+        mean_c = statistics.mean(cycles)
+        verdict = loop_verdict(cycles)
+        if verdict == "one-gap":
+            print(f"  one gap only:    {cycles[0]:.2f}s between the two static holds —")
+            print("                   record longer before calling that a cycle.")
+        elif verdict == "not-a-loop":
+            spread = (max(cycles) - min(cycles)) / mean_c
+            print(f"  NOT A LOOP:      gaps between static holds are {['%.2f' % c for c in cycles]} "
+                  f"({spread*100:.0f}% spread)")
+            print("                   a one-shot sequence (launch, transition, settle), not a cycle.")
+        else:
+            print(f"  cycle length:    mean {mean_c:.2f}s  {['%.2f' % c for c in cycles]}")
 
     print(f"\n  peak delta {peak:.2f}   mean {statistics.mean(v for _, v in diffs):.2f}")
 
@@ -180,7 +279,7 @@ def main():
         if src_w and src_w // sw >= 4:
             print(f"      Source is {src_w}px wide, downsampled {src_w//sw}x — sub-pixel motion")
             print(f"      (a few px of drift, a slow breath) would be smoothed out entirely.")
-        print(f"      Before concluding 'static', re-run with --res 270x300 (or higher).")
+        print(f"      Before concluding 'static', re-run with --res {sw*2}x{sh*2} (double this run).")
     print("\n## How to read this")
     print("  Sample frames AT the quiet points and AT the peaks, then look at them:")
     print("    quiet point sharp + peak shows two images ghosted  => crossfade")

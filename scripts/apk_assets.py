@@ -34,13 +34,19 @@ FONT = {".ttf", ".otf", ".woff", ".woff2"}
 
 # Screen buckets. Order matters — first match wins, so the more specific
 # patterns sit above the generic ones.
+#
+# Short tokens need boundaries. A bare `ble` matches `drawable`, `variable`,
+# `double` and `cable` — measured across six shipping apps, every single one
+# put junk in the `device` bucket that way, and on a native Android app the
+# whole `res/drawable/` tree (1976 of 2886 assets in one case) qualifies.
+# `(?<![a-z])` costs nothing and removes all of it.
 SCREENS = [
     ("onboarding", r"onboard|intro|tutorial|walkthrough|guide|coach"),
-    ("login",      r"login|signin|sign_in|sign-in|auth|register|signup|sign_up"),
+    ("login",      r"login|signin|sign_in|sign-in|auth(?!or)|register|signup|sign_up"),
     ("paywall",    r"paywall|subscri|premium|upgrade|purchase|pricing|billing"),
     ("splash",     r"splash|launch|startup"),
     ("empty",      r"empty|placeholder|nodata|no_data"),
-    ("device",     r"device|hardware|bluetooth|ble|pair"),
+    ("device",     r"device|hardware|bluetooth|(?<![a-z])ble(?![a-z])|(?<![a-z])pair"),
 ]
 
 
@@ -59,7 +65,11 @@ def classify_ext(name):
     return None
 
 
-def classify_screen(name):
+def classify_screen(name, kind=None):
+    # Fonts are app-wide, never screen-specific. They only ever land in a bucket
+    # by accident (InterVariable.ttf -> `device`) and crowd out what you wanted.
+    if kind == "font":
+        return None
     low = name.lower()
     for screen, pat in SCREENS:
         if re.search(pat, low):
@@ -120,7 +130,7 @@ def main():
             if not kind:
                 continue
             by_kind[kind] += i.file_size
-            screen = classify_screen(i.filename)
+            screen = classify_screen(i.filename, kind)
             if screen:
                 by_screen[screen].append((i.file_size, i.filename, kind))
 

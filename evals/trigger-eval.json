@@ -1,0 +1,23 @@
+[
+  {"query": "分析一下 Plaud 的登录页是怎么做的，我们的比它差太多", "should_trigger": true},
+  {"query": "竞品那个背景渐变的效果是怎么实现的？", "should_trigger": true},
+  {"query": "帮我看看别人家的付费墙是怎么设计的", "should_trigger": true},
+  {"query": "找几个 onboarding 做得好的录音类 App 参考一下", "should_trigger": true},
+  {"query": "这个 App 的转场动画到底多长时间？给我个能照着做的规格", "should_trigger": true},
+  {"query": "我们的空状态页很丑，同类产品都是怎么做的", "should_trigger": true},
+  {"query": "竞品首屏那张背景到底是视频还是静态图？", "should_trigger": true},
+  {"query": "Notion 移动端首页的信息结构帮我拆一下", "should_trigger": true},
+  {"query": "give me a spec for how XYZ built their sign-in screen, specific enough to rebuild", "should_trigger": true},
+  {"query": "我们的界面看起来很廉价，对手看着就贵，差在哪", "should_trigger": true},
+
+  {"query": "帮我设计一个登录页", "should_trigger": false},
+  {"query": "把这个 Flutter 登录页的按钮圆角改成 12", "should_trigger": false},
+  {"query": "我们的付费墙转化率太低，帮我改一版文案", "should_trigger": false},
+  {"query": "给我们的 App 做一套配色方案", "should_trigger": false},
+  {"query": "这段录屏帮我剪成 gif", "should_trigger": false},
+  {"query": "帮我把这个 APK 反编译一下，看看有没有埋后门", "should_trigger": false},
+  {"query": "分析一下竞品的定价策略和套餐结构", "should_trigger": false},
+  {"query": "这个页面在小屏上文字溢出了，帮我修", "should_trigger": false},
+  {"query": "写一份竞品调研报告，重点是功能对比和市场份额", "should_trigger": false},
+  {"query": "我们的登录接口返回 401 了，帮我排查", "should_trigger": false}
+]

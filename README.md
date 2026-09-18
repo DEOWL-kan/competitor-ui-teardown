@@ -31,27 +31,49 @@ Anything that can't be measured gets labelled as inference. That distinction is 
 ## What's in here
 
 ```
-SKILL.md                  The workflow
-references/pitfalls.md    Eight ways this goes wrong, all of them observed in practice
+SKILL.md                  The workflow (Claude Code skill; Chinese)
+AGENTS.md                 Same workflow + boundaries for any agents.md-compatible agent
+references/pitfalls.md    Fourteen ways this goes wrong, every one of them observed
+references/web.md         Web products read their specs in the clear — a shorter route
 references/android.md     Device + package commands
 scripts/apk_assets.py     Asset inventory, grouped by screen
 scripts/frame_diff.py     Motion rhythm from a screen recording
 scripts/image_probe.py    Grain / gradient structure / colour / contrast
+scripts/test_regressions.py  One sample per fixed bug — `python3 scripts/test_regressions.py`
+evals/                    Trigger-accuracy eval sets (tuning + held out)
 ```
 
 Requirements: Python 3.8+ (standard library only), `ffmpeg` and `ffprobe` on PATH,
 plus `adb` if you're working with Android devices.
 
-## Use it as a Claude Code skill
+## Use it with your agent
 
 ```bash
 git clone https://github.com/DEOWL-kan/competitor-ui-teardown.git
+```
+
+**Claude Code** — install it as a skill, then just ask for what you want:
+
+```bash
 ln -s "$PWD/competitor-ui-teardown" ~/.claude/skills/competitor-ui-teardown
 ```
 
-Then just ask, in whatever words come naturally:
-
 > analyse how XYZ builds their login screen — ours feels cheap next to it
+
+Triggering is measured, not hoped for: 20/20 on the tuning set in `evals/`, **7/8 on a
+held-out set**. Phrasings like "their paywall looks expensive, ours doesn't" or "is that
+background a video?" reach it; "design me a login page" deliberately does not.
+
+**Codex, Cursor, Windsurf, Gemini CLI, opencode, Amp** and anything else that follows the
+[agents.md](https://agents.md) convention — `AGENTS.md` at the repo root is the entry
+point, including the authorization gates. Clone it next to your project, or point the
+agent at the checkout:
+
+> read AGENTS.md in ./competitor-ui-teardown, then tear down XYZ's onboarding
+
+**Any other agent, or no agent at all** — the scripts are plain Python with `--help` on
+each, and `SKILL.md` is the workflow in full. Nothing imports anything you do not
+already have.
 
 ## Use the scripts directly
 
@@ -60,6 +82,7 @@ Then just ask, in whatever words come naturally:
 python3 scripts/apk_assets.py app.apk --screen login
 
 # How does that animation actually behave?
+python3 scripts/frame_diff.py recording.mp4 --suggest-crop   # where is the motion?
 python3 scripts/frame_diff.py recording.mp4 --crop 1080x1200+0+200
 
 # How was this background made, and is my text readable on it?
@@ -102,35 +125,53 @@ user's behalf.
 
 ## Why the pitfalls file is the most useful part
 
-Every entry in `references/pitfalls.md` is a mistake that actually happened during the work this skill was
-distilled from — attributing an onboarding video to a login screen (twice), estimating animation timing
-from 1 fps samples, inferring texture from file size, painting a competitor's product details onto your own
-product's spec sheet. The scripts exist mostly to make those specific mistakes harder to repeat.
+Every entry in `references/pitfalls.md` is a mistake that actually happened — attributing an onboarding
+video to a login screen (twice), estimating animation timing from 1 fps samples, inferring texture from
+file size, painting a competitor's product details onto your own product's spec sheet.
+
+Entries 9–14 came from turning the scripts loose on apps they had never seen, and five of the six are the
+*scripts* being wrong rather than the analyst: a `ble` substring that matched `drawable`, a contrast check
+that scored a headline against its own pixels, a "cycle length" reported for a sequence that never repeats.
+Each one is now pinned by a sample in `scripts/test_regressions.py`. The scripts exist mostly to make these
+specific mistakes harder to repeat; the tests exist to keep the scripts honest.
 
 ## Known limitations
 
 Stated plainly, because a teardown tool that overstates its own reach is the worst kind:
 
-**Android only.** iOS packages cannot be pulled from a non-jailbroken device, so the asset-inventory
-half of this simply does not apply there. Plenty of design-leading apps are iOS-first. For those you
-are limited to screen recordings (`frame_diff.py`) and screenshots (`image_probe.py`) — still useful,
-but you lose the single most decisive step.
+**Android only, and iOS is an explicit non-goal.** There is no adb for iPhone, so the whole
+device-to-package chain is missing and the asset inventory — the step that actually settles "is that
+a video or five JPEGs" — cannot run at all. Plenty of design-leading apps are iOS-first; for those you
+get motion analysis (`frame_diff.py`) and pixel analysis (`image_probe.py`) and nothing else. That is
+a real ceiling, stated here rather than discovered halfway through a teardown.
 
-**Distilled from one investigation.** The workflow and every pitfall come from one real teardown. They
-proved out there; they have not yet been stress-tested across many apps. Expect the screen-bucket
-regexes in `apk_assets.py` to miss on apps with obfuscated or idiosyncratic asset naming.
+**Distilled from two investigations.** A second teardown (2026-09-18) ran the workflow end to end on an
+app it had never seen, and ran the scripts over five more shipping packages — Flutter and native, clean
+naming and obfuscated. It found six bugs, all now fixed and pinned by `scripts/test_regressions.py`; the
+worst was a `ble` substring that matched `drawable` and put 1976 of one app's 2886 assets in the
+"device" bucket. See `references/pitfalls.md` 9–14. The screen buckets are still a keyword heuristic:
+treat them as a lead, not an inventory, and grep the full paths with your own product's vocabulary.
 
 **Subtle motion needs a higher analysis resolution.** `frame_diff.py` downsamples before differencing.
 A 3px drift on a 1080px capture is 0.3px at the default resolution and gets smoothed away — the script
 now warns and tells you to raise `--res`, but it cannot detect what it never resolved.
 
-**Contrast is measured against whole-image extremes.** `image_probe.py --contrast` compares your text
-colour to the lightest and darkest pixels anywhere in the image. If your text only ever sits in one
-region, that is pessimistic. And if any scrim or overlay sits between text and background, none of
-these numbers are the shipping values — you have to recompute on composited pixels.
+**Contrast wants a background, not a screenshot.** `image_probe.py --contrast` now takes the p10/p90 of
+the sampled grid rather than the absolute extremes, because on a screenshot the darkest "background"
+pixel is the body text itself — measured on a real sign-in screen it scored `#111111` text against
+`#16181A` text and called it a fail. Percentiles fix that specific lie, not the general problem: feed it
+the extracted background asset. And if any scrim or overlay sits between text and background, none of
+these numbers are the shipping values — recompute on composited pixels.
 
-**Split APKs aren't handled.** The script reads one package file. Most of the time resources live in
-`base.apk` and that is enough; occasionally they don't.
+**Split APKs aren't merged.** The script reads one package file. Measured across six shipping apps,
+`base.apk` carried over 99% of the asset weight — the density and language splits held 0.1 MB of
+leftovers — so pointing it at `base.apk` is normally the whole answer. `pm path` will still hand you
+five or six lines to pick from.
+
+**Trigger accuracy is measured, not assumed.** `evals/` holds 20 tuning queries and 8 held out.
+The description scores 20/20 on the set it was tuned against and **7/8 on the held-out set** — believe
+the second number. The one miss asks about implementation *source* ("did they draw that waveform or use
+a library?") rather than visual mechanism.
 
 **Getting from teardown to your own design is still on you.** The skill produces a specification of how
 someone else did it. Deciding what of that applies to your product, brand and constraints — and what
@@ -168,12 +209,25 @@ MIT — see [LICENSE](LICENSE).
 
 ```bash
 git clone https://github.com/DEOWL-kan/competitor-ui-teardown.git
+```
+
+**Claude Code** —— 软链成 skill，然后直接说人话：
+
+```bash
 ln -s "$PWD/competitor-ui-teardown" ~/.claude/skills/competitor-ui-teardown
 ```
 
-然后直接说人话就行：
-
 > 分析一下 XX 的登录页是怎么做的，我们的比它差太多
+
+**Codex / Cursor / Windsurf / Gemini CLI / opencode** 等遵循 [agents.md](https://agents.md) 约定的 ——
+根目录 `AGENTS.md` 就是入口（含授权边界），让 agent 读它即可：
+
+> 读一下 ./competitor-ui-teardown/AGENTS.md，然后拆 XX 的引导页
+
+**不用 agent** —— 三个脚本都是纯 Python 带 `--help`，完整流程见 `SKILL.md`。
+
+⛔ **iOS 暂不支持**：iPhone 上没有 adb，拿不到安装包，资源清单这一步整条链路不成立。
+录屏和截图分析仍然有效，但「用什么做的」量不了 —— 详见 `SKILL.md` 第 2 步上方。
 
 ## 边界
 

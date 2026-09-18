@@ -1,8 +1,20 @@
-# 竞品素材与中间产物一律不入库
+# 竞品素材与中间产物一律不入库。
+# 这是兜底，不是「可以试试」——见 README「Boundaries」/ AGENTS.md。
 out/
 probe/
+frames/
+shots/
 *.apk
+*.ipa
 *.raw
 *.mp4
+*.mov
+*.webm
+# 截图/抽帧最容易顺手 add 进来，默认挡掉。
+# 真要放项目自己的图（示意图、流程图），用 git add -f 显式加。
+*.png
+*.jpg
+*.jpeg
+*.webp
 __pycache__/
 .DS_Store

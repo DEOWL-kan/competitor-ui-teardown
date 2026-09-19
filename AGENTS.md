@@ -19,9 +19,22 @@ between five JPEGs, light centred at 58% height" is.
 
 ## Using it on a teardown task
 
+Two kinds of request arrive, and they want different outputs:
+
+- **"Tear this down"** — the user has named a product or screen they admire. Output is a
+  spec for that one screen (mechanism, measured values, what to borrow, what not to).
+- **"Help me find ideas"** — the user is designing a screen and is stuck. Output is a
+  **comparison brief**: three shipping references (mix web and app), each reduced to its
+  mechanism in one line, where they agree, where they diverge, and which route fits the
+  user's constraints. Only after they pick one do you tear it down in full.
+  The most common mistake here is tearing down the first thing you find instead of
+  offering a choice.
+
 The full five-step workflow is in `SKILL.md`. The short version:
 
-1. **Pick targets.** Two or three torn down properly beats ten surveyed. Prefer apps
+1. **Pick targets.** Search web and app together — the difference between how the two
+   platforms solve the same screen is itself an idea. Finding is free (package lists,
+   store screenshots, opening a website); fetching a package is not — see Boundaries. Two or three torn down properly beats ten surveyed. Prefer apps
    already installed on the device you have access to — no download, no authorization.
 2. **Observe on a real device first.** The asset list tells you *what exists*; only the
    running app tells you *which screen uses it*. Record entry animations from a cold

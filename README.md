@@ -36,6 +36,7 @@ AGENTS.md                 Same workflow + boundaries for any agents.md-compatibl
 references/pitfalls.md    Fourteen ways this goes wrong, every one of them observed
 references/web.md         Web products read their specs in the clear — a shorter route
 references/android.md     Device + package commands
+scripts/preflight.py      What's missing (ffmpeg / adb / device) before you start, with install hints
 scripts/apk_assets.py     Asset inventory, grouped by screen
 scripts/frame_diff.py     Motion rhythm from a screen recording
 scripts/image_probe.py    Grain / gradient structure / colour / contrast
@@ -196,6 +197,9 @@ MIT — see [LICENSE](LICENSE).
 差了四倍多，而这个错误结论已经写进过交付文档。
 
 本项目的做法是：**能测的一律测，不能测的标明是推断**。
+
+两种入口：**拆这个**——你点名一屏，拿到它的规格；**帮我找**——你要做某一屏没思路，拿到一份对比简报
+（web 与 App 混合的三个真实参考、各自机制、共同点与分歧点、结合你的约束该走哪条），选定后再深拆。
 
 | 想知道 | 怎么测 |
 |---|---|

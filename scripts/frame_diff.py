@@ -80,55 +80,43 @@ def _rate(s):
     return n / d if n and d else None
 
 
-def source_rate(info):
-    """The rate worth dividing into.
+def source_rates(info):
+    """(declared, average) frame rate, either of which may be None.
 
-    avg_frame_rate first, because `adb shell screenrecord` emits a frame only
-    when the screen changes and then labels the file r_frame_rate=30/1 anyway --
-    measured: a clip averaging 15.2 fps claimed 30. Same header dishonesty that
-    makes nb_frames useless (pitfall 13), so treat r_frame_rate the same way.
+    Both are reported, never reconciled. `adb shell screenrecord` emits a frame
+    only when the screen changes -- measured on a real device, 2s of a static
+    screen produced a single frame -- and labels the file r_frame_rate=30/1
+    regardless. A clip averaging 15.2 fps still declared 30. So a disagreement
+    between the two is information about the recording, not an error to fix.
     """
-    return _rate(info.get("avg_frame_rate")) or _rate(info.get("r_frame_rate"))
+    return _rate(info.get("r_frame_rate")), _rate(info.get("avg_frame_rate"))
 
 
-def divisor_advice(src, fps, tol=0.02):
-    """Largest sampling rate <= fps that divides `src` evenly, or None if fine.
+def duplicate_samples(diffs, quiet, ratio=0.25):
+    """Samples that read as a static hold but sit inside motion.
 
-    ffmpeg's fps filter bridges a non-integer ratio by duplicating and dropping
-    frames unevenly. On a textured screen that is harmless noise. On a flat
-    surface -- a gradient with no grain, which is exactly the kind of background
-    this tool gets pointed at -- every pixel crosses its 8-bit boundary in
-    lockstep, so the duplicated samples read delta 0 and the signal strobes
-    across quiet_threshold. One transition then splits into move/quiet/move,
-    which invents a static hold, and the loop verdict flips to NOT A LOOP on a
-    clip that loops perfectly. Measured on a 4.2s synthetic loop: 30 fps source
-    sampled at 20 gave "NOT A LOOP, 80% spread"; at 15 it gave cycle 4.16s.
+    A rate-converted clip carries duplicated frames: ffmpeg bridges 25 -> 30 by
+    repeating one frame in five, and resampling a variable-rate recording to a
+    fixed grid does the same. A duplicate is not a static hold -- nothing moved
+    because the same bytes arrived twice -- but it reads as one, and one
+    transition then splits into move/quiet/move. That invents a static hold and
+    the loop verdict flips to NOT A LOOP on a clip that loops perfectly.
+
+    Measured: a 4.2s synthetic loop built by upsampling 25 -> 30 reported
+    "NOT A LOOP, 80% spread" at the default sampling rate; the same loop
+    generated natively at 30 fps reported cycle 4.13s at that same rate. The
+    upsampling was the necessary condition -- not the sampling ratio, which an
+    earlier version of this file wrongly blamed (pitfall 30).
+
+    Returns the timestamps, so the caller can report how many there are rather
+    than silently repairing a signal it cannot reconstruct.
     """
-    if not src or fps <= 0:
-        return None
-    if abs(src / fps - round(src / fps)) <= tol:
-        return None
-    for k in range(max(1, round(src / fps)), int(src) + 2):
-        cand = src / k
-        if cand <= fps:
-            # Floor to a whole number: the caller has to type this back in, and
-            # on a variable-rate recording `src` is an average anyway, so a rate
-            # like 15.2103 is false precision as well as unusable.
-            return float(int(cand)) or None
-    return None
-
-
-def is_vfr(info, tol=0.05):
-    """Does the container's declared rate disagree with what it actually holds?
-
-    `adb shell screenrecord` emits a frame only when the screen changes, so a
-    clip of a still screen holds one frame for its whole duration. It labels the
-    file r_frame_rate=30/1 regardless. Measured on a real device: 2s of a static
-    screen produced a single frame, and a decimated 14s clip averaging 15.2 fps
-    still declared 30. There is no cadence to divide into on such a file.
-    """
-    r, avg = _rate(info.get("r_frame_rate")), _rate(info.get("avg_frame_rate"))
-    return bool(r and avg and abs(r - avg) / r > tol)
+    hits = []
+    for i in range(1, len(diffs) - 1):
+        prev, (t, v), nxt = diffs[i - 1][1], diffs[i], diffs[i + 1][1]
+        if v <= quiet and prev > quiet and nxt > quiet and v <= max(prev, nxt) * ratio:
+            hits.append(t)
+    return hits
 
 
 def segments(diffs, fps, quiet, min_run=None):
@@ -261,20 +249,12 @@ def main():
     sw, sh = (int(v) for v in a.res.lower().split("x"))
     frames = sample(a.video, a.fps, a.crop, sw, sh)
     print(f"  {len(frames)} frames sampled at {a.fps} fps, analysed at {sw}x{sh}")
-    src_fps = source_rate(info)
-    better = divisor_advice(src_fps, a.fps)
-    if better:
-        if is_vfr(info):
-            print(f"  ⚠️  variable frame rate: the header says {_rate(info.get('r_frame_rate')):g} fps, "
-                  f"the file averages {src_fps:.3g}.")
-            print( "      screenrecord emits a frame only when the screen changes, so there is")
-            print( "      no cadence to sample against.")
-        else:
-            print(f"  ⚠️  {a.fps:g} fps does not divide this source's {src_fps:g} fps evenly.")
-        print( "      ffmpeg duplicates and drops frames to bridge the gap. On a flat")
-        print( "      surface (a gradient with no grain) the duplicates read as delta 0")
-        print( "      and one transition can split into move/quiet/move.")
-        print(f"      Re-run with --fps {better:g} before trusting the segments below.")
+    declared, average = source_rates(info)
+    if declared and average and abs(declared - average) / declared > 0.05:
+        print(f"  variable frame rate: header says {declared:g} fps, file averages {average:.3g}")
+        print( "  (screenrecord emits a frame only when the screen changes — this is")
+        print( "   information about the recording, not an error)")
+
     n = sw * sh
     diffs = []
     for i in range(1, len(frames)):
@@ -283,6 +263,30 @@ def main():
         diffs.append((i / a.fps, s))
     if not diffs:
         sys.exit("not enough frames sampled")
+
+    # Duplicated frames read as static holds and split one transition in three.
+    # Report them; do not repair them — the original frames are gone, and a
+    # guessed replacement is a measurement this tool did not make.
+    dupes = duplicate_samples(diffs, a.quiet_threshold)
+    dupe_rate = len(dupes) / len(diffs)
+    # ponytail: 2% splits "an isolated dip" from "a systematic pattern" on the
+    # fixtures this was built against (0.7% on a natively recorded clip, 10.7%
+    # on the same content upsampled 25 -> 30). It is a judgement call, not a
+    # measurement — so the count is always printed and only the strong claim
+    # is gated. Raise it if clean recordings start tripping the warning.
+    if dupes:
+        print(f"\n  {len(dupes)} of {len(diffs)} samples ({dupe_rate:.1%}) fall below the quiet")
+        print( "  threshold while both neighbours are moving.")
+        if dupe_rate >= 0.02:
+            print( "  ⚠️  At this rate that is duplicated frames, not static holds — a")
+            print( "      rate-converted clip (25 -> 30), or a variable-rate recording")
+            print( "      resampled onto a fixed grid. Segmentation reads each as a hold,")
+            print( "      which splits transitions and can flip the loop verdict below.")
+            print( "      Re-record natively rather than converting, then re-run.")
+            print(f"      at: {', '.join('%.2f' % t for t in dupes[:8])}"
+                  + (" …" if len(dupes) > 8 else ""))
+        else:
+            print( "  (isolated — below the level that distorts segmentation)")
 
     if a.suggest_crop:
         box = suggest_crop(frames, sw, sh, int(info.get("width") or 0),
@@ -340,12 +344,13 @@ def main():
             print(f"  NOT A LOOP:      gaps between static holds are {['%.2f' % c for c in cycles]} "
                   f"({spread*100:.0f}% spread)")
             print("                   a one-shot sequence (launch, transition, settle), not a cycle.")
-            if better:
-                # The split this verdict is built on is the exact thing an uneven
-                # sampling ratio fabricates, so say it here rather than only in a
-                # header the reader has already scrolled past.
-                print(f"                   ⚠️  but --fps {a.fps:g} is not a clean rate for this source —")
-                print(f"                       re-run at --fps {better:g} before believing it.")
+            if dupe_rate >= 0.02:
+                # This verdict is built on the split that duplicated frames
+                # fabricate, so say it here rather than only in a header the
+                # reader has already scrolled past.
+                print(f"                   ⚠️  but {len(dupes)} sample(s) read as a hold while surrounded by")
+                print( "                       motion — duplicated frames, see the note above. Re-record")
+                print( "                       natively rather than rate-converting, then re-run.")
         else:
             print(f"  cycle length:    mean {mean_c:.2f}s  {['%.2f' % c for c in cycles]}")
 

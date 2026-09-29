@@ -207,17 +207,20 @@ the asset inventory — the step that actually settles "video or five JPEGs" —
 cannot run at all. For iOS-first apps you get motion and pixel analysis and
 nothing else.
 
-**Screen recordings are variable frame rate.** `adb shell screenrecord` has no
+**Rate-converted clips break segmentation.** Duplicated frames read as static
+holds and split one transition into three. `adb shell screenrecord` has no
 `--fps` flag and emits a frame only when the screen changes — measured, 2s of a
-static screen produced a single frame — while still labelling the file
-`r_frame_rate=30/1`. On a flat gradient that makes resampling artifacts look
-like real motion. The script now detects this and says so (pitfall 30), but the
-warning is only as good as your willingness to re-run.
+static screen produced a single frame — so resampling one onto a fixed grid
+duplicates frames, as does upsampling. The script reports how many samples carry
+that signature and flags it above 2%; it does not repair the signal, because the
+original frames are gone. Record natively at the rate you want.
 
 **Eased transition durations read short.** Measured against a known 2.7s
 crossfade, the reported duration was 2.16–2.38s; the deficit lands in the
-adjacent static hold. Treat transition duration as a lower bound. `cycle length`
-is immune to this and is the number to quote.
+adjacent static hold. Treat it as a lower bound. `cycle length` is steadier —
+it measured 4.13–4.20s against a known 4.20s across every fixture and sampling
+rate — but it is not immune: a recording that starts partway through the first
+hold truncates that segment, and the error does not cancel.
 
 **Subtle motion needs a higher resolution.** `frame_diff.py` downsamples before
 differencing, so 3px of drift on a 1080px capture is 0.3px at the default and

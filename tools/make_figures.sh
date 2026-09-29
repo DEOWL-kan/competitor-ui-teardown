@@ -21,13 +21,18 @@ for i in 1 2 3 4; do
   magick -size 1080x1920 gradient:"$c" "$TMP/g$i.png"
 done
 S='(P*P*(3-2*P))'; E="A*$S+B*(1-$S)"          # P runs 1 -> 0, so A is the start
+# -framerate 30 on every input is load-bearing: ffmpeg's image2 demuxer defaults
+# to 25 fps, so without it the filter graph runs at 25 and the output -r 30
+# upsamples — repeating one frame in five. Those duplicates read as static holds
+# and split the transitions, which is what produced the wrong root cause in
+# pitfall 30. Generate at the rate you want; never rate-convert a fixture.
 ffmpeg -loglevel error -y \
-  -loop 1 -t 15 -i "$TMP/g1.png" -loop 1 -t 15 -i "$TMP/g2.png" \
-  -loop 1 -t 15 -i "$TMP/g3.png" -loop 1 -t 15 -i "$TMP/g4.png" \
+  -framerate 30 -loop 1 -t 15 -i "$TMP/g1.png" -framerate 30 -loop 1 -t 15 -i "$TMP/g2.png" \
+  -framerate 30 -loop 1 -t 15 -i "$TMP/g3.png" -framerate 30 -loop 1 -t 15 -i "$TMP/g4.png" \
   -filter_complex "[0][1]xfade=transition=custom:duration=2.7:offset=1.5:expr='$E'[x1];\
 [x1][2]xfade=transition=custom:duration=2.7:offset=5.7:expr='$E'[x2];\
 [x2][3]xfade=transition=custom:duration=2.7:offset=9.9:expr='$E'[v]" \
-  -map "[v]" -t 14.1 -r 30 -pix_fmt yuv420p -c:v libx264 -crf 20 "$TMP/cfr.mp4"
+  -map "[v]" -t 14.1 -pix_fmt yuv420p -c:v libx264 -crf 20 "$TMP/cfr.mp4"
 # screenrecord emits a frame only when the screen changes; mpdecimate reproduces
 # that, which is what makes the default sampling rate misfire.
 ffmpeg -loglevel error -y -i "$TMP/cfr.mp4" -vf mpdecimate=hi=64:lo=32:frac=0.33 \
@@ -64,14 +69,10 @@ PY
   python3 scripts/frame_diff.py "$TMP/rec.mp4" --no-plot \
    | grep -vE "^  TIP|otherwise a blinking|^## How to read|^  Sample frames|^    quiet point|^    every frame|^  Do not report|^  peak delta"
   echo
-  echo "\$ python3 scripts/frame_diff.py rec.mp4 --fps 15 --no-plot"
-  python3 scripts/frame_diff.py "$TMP/rec.mp4" --fps 15 --no-plot \
-   | grep -E "^  static segments|^  moving segments|^  cycle length"
-  echo
   echo "# ground truth — this clip was generated, so the answer is known:"
   echo "#   hold 1.50s + eased crossfade 2.70s, looping. cycle = 4.20s"
 } | python3 tools/render_svg.py "$OUT/frame-diff.svg" \
-      --title "frame_diff.py — and when it tells you not to believe it"
+      --title "frame_diff.py — motion rhythm, measured against a known answer"
 
 { echo "\$ python3 scripts/image_probe.py bg.png --contrast '#FFFFFF,#8FA3A8'"
   python3 scripts/image_probe.py "$TMP/flat.png" --grid 0 --contrast '#FFFFFF,#8FA3A8' | tail -n +2

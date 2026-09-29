@@ -509,48 +509,49 @@ def test_binary_strings_needs_a_minimum_run():
     assert "ab" not in got
 
 
-def test_sampling_rate_that_does_not_divide_the_source_is_called_out():
-    """pitfall 30 — an uneven sampling ratio fabricated a NOT A LOOP verdict.
+def test_duplicate_frames_are_reported_not_repaired():
+    """pitfall 30 — duplicated frames read as static holds and split transitions.
 
-    Measured on a synthetic 4.2s loop (hold 1.5s + eased crossfade 2.7s): a
-    30 fps source sampled at the default 20 reported 5 static holds, 4 moves and
-    "NOT A LOOP, 80% spread". Sampled at 15 the same clip gave cycle 4.16s. The
-    flat gradient is the necessary half — with film grain added, 20 fps was fine
-    — but flat gradients are exactly what this tool gets pointed at.
+    The signature is a sample below the quiet threshold with motion on both
+    sides. Measured on a 4.2s synthetic loop: 0.7% of samples on a natively
+    recorded clip, 10.7% on the same content upsampled 25 -> 30, where the
+    verdict flipped to NOT A LOOP.
     """
-    # 30/20 = 1.5: uneven, and 15 is the largest whole rate that divides 30.
-    assert frame_diff.divisor_advice(30, 20) == 15
-    # Integer ratios must stay silent, or the warning becomes wallpaper.
-    assert frame_diff.divisor_advice(60, 20) is None
-    assert frame_diff.divisor_advice(30, 15) is None
-    assert frame_diff.divisor_advice(30, 10) is None
-    # No rate to compare against -> no advice, never a crash.
-    assert frame_diff.divisor_advice(None, 20) is None
-    assert frame_diff.divisor_advice(0, 20) is None
-    # Never hand back false precision: a VFR average of 15.21 must not come back
-    # as "--fps 15.2103", which is both unusable and a rate that does not exist.
-    got = frame_diff.divisor_advice(15.21, 20)
-    assert got == 15 and float(got).is_integer(), got
+    q = 0.1
+    # one dip surrounded by motion -> a duplicate
+    diffs = [(i * 0.05, v) for i, v in enumerate([0.5, 0.6, 0.02, 0.6, 0.5])]
+    assert frame_diff.duplicate_samples(diffs, q) == [0.1], diffs
+    # a genuine hold is not a duplicate: its neighbours are quiet too
+    hold = [(i * 0.05, v) for i, v in enumerate([0.5, 0.02, 0.02, 0.02, 0.5])]
+    assert frame_diff.duplicate_samples(hold, q) == []
+    # A dip that is shallow RELATIVE to its neighbours is a real slowdown, not a
+    # duplicate. Measured duplicates sat at 12-28% of the local peak after lossy
+    # encoding and downsampling, so the ratio is what separates them — an
+    # absolute threshold would call every eased transition a duplicate.
+    shallow = [(i * 0.05, v) for i, v in enumerate([0.3, 0.25, 0.09, 0.2, 0.3])]
+    assert frame_diff.duplicate_samples(shallow, q) == [], shallow   # 0.09/0.25 = 36%
+    # ends are never candidates — there is no "both neighbours" to check
+    assert frame_diff.duplicate_samples([(0.0, 0.0), (0.05, 0.5)], q) == []
 
 
-def test_a_variable_rate_recording_is_not_trusted_for_its_declared_fps():
-    """pitfall 30 — screenrecord labels a VFR file with a cadence it never had.
+def test_declared_and_average_frame_rates_are_both_reported():
+    """pitfall 30 — the two rates are reported, never reconciled.
 
-    Measured on a real device: 2s of a static screen produced a single frame,
-    and a clip averaging 15.2 fps still declared r_frame_rate=30/1. Same header
-    dishonesty as nb_frames (pitfall 13).
+    screenrecord labels a variable-rate file r_frame_rate=30/1 while averaging
+    15.2. An earlier version tried to derive a "correct" sampling rate from
+    this and produced cascading advice (25 fps -> 10 -> 8 -> 6 -> 5); that is
+    gone. Both numbers are printed and the analyst judges.
     """
-    vfr = {"r_frame_rate": "30/1", "avg_frame_rate": "3255/214"}   # 30 vs 15.2
-    assert frame_diff.is_vfr(vfr)
-    assert abs(frame_diff.source_rate(vfr) - 15.21) < 0.01   # the average wins
+    vfr = {"r_frame_rate": "30/1", "avg_frame_rate": "3255/214"}
+    declared, average = frame_diff.source_rates(vfr)
+    assert declared == 30 and abs(average - 15.21) < 0.01
     cfr = {"r_frame_rate": "30/1", "avg_frame_rate": "30/1"}
-    assert not frame_diff.is_vfr(cfr)
-    assert frame_diff.source_rate(cfr) == 30
-    # ffprobe writes 0/0 when it cannot tell; that must degrade, not crash.
-    unknown = {"r_frame_rate": "0/0", "avg_frame_rate": "0/0"}
-    assert not frame_diff.is_vfr(unknown)
-    assert frame_diff.source_rate(unknown) is None
-    assert frame_diff.source_rate({}) is None
+    assert frame_diff.source_rates(cfr) == (30, 30)
+    # ffprobe writes 0/0 when it cannot tell; degrade, never crash
+    assert frame_diff.source_rates({"r_frame_rate": "0/0", "avg_frame_rate": "0/0"}) == (None, None)
+    assert frame_diff.source_rates({}) == (None, None)
+    # the removed heuristic must not come back
+    assert not hasattr(frame_diff, "divisor_advice"), "divisor_advice was removed (pitfall 30)"
 
 
 def test_nb_frames_is_not_frame_count():

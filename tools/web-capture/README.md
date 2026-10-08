@@ -46,14 +46,25 @@ The browser uses a fresh context, no personal profile or existing cookies. No en
 - `manifest.json`: actual runtime versions, limits, dropped counts and coverage gaps.
 - `actions.jsonl`: operation windows, before/after probe and screenshot references, completion/failure. The window includes automation and waits; it is not calibrated end-user latency.
 - `network.jsonl`: context-level HTTP, IDs, method/type/status, headers, request/response body states, frame/page, redirect parent/hop and duration. Duration is local event elapsed time, not isolated server processing time.
-- `streams.jsonl`: CDP initiator frames (zero-based line/column), cache/SW flags, WS sent/received/close/error, EventSource messages. CDP IDs (`page-N:cdp:...`) are **not** Playwright HTTP IDs (`http-N`). No automatic cross-ID join is claimed. Workers/OOPIF streams and early popup events may be missing.
+- `streams.jsonl`: CDP initiator frames (zero-based line/column), cache/SW flags, WS sent/received/close/error, EventSource messages. CDP IDs (`page-N:cdp:...`) are **not** Playwright HTTP IDs (`http-N`). Final records retain metadata-based candidate links (page, URL, method, redirect hop and time); ambiguity stays explicit, never an exact identity or causal join. Chromium observes Worker/OOPIF streams; early popup events and service-worker-owned streams may be missing.
 - `events.jsonl`: incremental events for recovery; `network.jsonl` is the final HTTP state. Incomplete sessions have `complete:false`.
 - `snapshots/`: viewport screenshots plus bounded DOM/style/animation probe. CSP or browser errors can make snapshots unavailable.
 
-HTTP 4xx/5xx can have captured bodies; they are not transport failure. Bodies distinguish `captured`, `empty`, `not_requested`, `unavailable`, `truncated`. A body with unknown Content-Length, compression or excessive declared size is skipped to bound buffering. JSON/form requests are supported; multipart/file bytes are omitted. JavaScript/JSONP and binary responses are not parsed as JSON. SSE covers native EventSource, not incremental fetch streams. HAR imports cannot recreate missing stream frames, actions or omitted bodies.
+HTTP 4xx/5xx can have captured bodies; they are not transport failure. Bodies distinguish `captured`, `empty`, `not_requested`, `unavailable`, `truncated`. The portable HTTP reader skips unknown Content-Length, compression or excessive declared size to bound buffering. Chromium additionally reads bounded decoded bodies directly through CDP, with no resource-reload fallback. Playwright body reads that can refetch are skipped. JSON/form requests are supported; multipart/file bytes are omitted. Strict JSONP callbacks are parsed as JSON without executing JavaScript; arbitrary scripts and binary responses are not parsed as JSON. SSE covers native EventSource, not incremental fetch streams. HAR imports cannot recreate missing stream frames, actions or omitted bodies.
 
-Action IDs on requests are **time-window candidates**, potentially multiple. Unassigned requests remain unassigned; delayed requests after an action are not retroactively attached. Parameter/response/UI evidence and initiators are needed to support a functional claim. `check_report --capture` checks HTTP session/request/action/body references; stream evidence and causation need manual review.
+Action IDs on requests are **time-window candidates**, potentially multiple. Unassigned requests remain unassigned; delayed requests after an action are not retroactively attached. Parameter/response/UI evidence and initiators are needed to support a functional claim. `check_report --capture` checks HTTP and stream session/request/action/body references. Stream locators additionally require event_id from streams.jsonl; causation still needs manual review.
 
 Default privacy keeps JSON/form structure and masks leaf values with consistent per-session placeholders. Explicit allow-lists preserve selected fields/query values, except named secrets. Most header values are omitted. **URL paths, field names, screenshots, CSS, allowed values and analyst descriptions can still contain private data.** They require manual review; this is not a guarantee of anonymization. HAR input is capped at 32 MiB and never replayed.
 
 Official backend references: [Playwright Request](https://playwright.dev/docs/api/class-request), [Response](https://playwright.dev/docs/api/class-response), [CDP Network](https://chromedevtools.github.io/devtools-protocol/tot/Network/).
+
+## Browser coverage verified 2026-10-08
+
+Use job `browserName: "firefox"` or `"webkit"`, or `--browser firefox --check`. Install the chosen engines explicitly, then `npm run test:cross`; default tests need only Chromium.
+
+| Backend | Verified coverage | Explicit limit |
+|---|---|---|
+| Chromium 156 | HTTP, decoded gzip/JSONP, WS, native EventSource, worker/OOPIF streams, cache/SW source flags, DOM/style/animation | Child targets pause briefly for attachment; captures are not calibrated performance measurements |
+| Firefox 157 / WebKit 27.2 | HTTP, page WS, DOM/style/animation truth fixture | No CDP initiators/cache flags/native SSE capture or child-target stream guarantee |
+
+Each manifest records backend capabilities. CDP body events have their own event/request IDs; a HTTP body marked unavailable stays unavailable even when a CDP candidate has a body. Final `streams.jsonl` includes candidate links added at shutdown; incremental `events.jsonl` does not backfill them. Native EventSource capture does not cover arbitrary fetch streaming.

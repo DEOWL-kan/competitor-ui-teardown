@@ -36,7 +36,7 @@ Resource Timing 的 0 大小可能来自缓存或访问限制；条目也可能�
 操作前开始观察，保存 baseline→动作→等待目标状态→after；比较操作、请求和 UI，区分时间相关与因果证据。
 可选实时后端见 [tools/web-capture](../tools/web-capture/README.md)：隔离的 Playwright/Chromium 记录 HTTP、重定向、传输失败与正文状态，并通过 CDP 记录 WebSocket 帧及原生 EventSource 消息。页面探针继续只负责静态快照。
 
-操作记录包含前后快照、时间窗口及候选请求。先使用 `demo.mjs` 验证搜索/分页、表单和流式自制样本，再按授权研究真实目标。输出必须在仓库外；未知大小、压缩响应、文件上传和跨 target 流式事件有明确覆盖限制。
+操作记录包含前后快照、时间窗口及候选请求。先使用 `demo.mjs` 验证搜索/分页、表单和流式自制样本，再按授权研究真实目标。输出必须在仓库外；各引擎正文/跨 target 覆盖以 manifest 为准：Chromium 可直接读取受限的解码正文与 Worker/OOPIF 流事件；Firefox/WebKit 无 CDP 原生 SSE。文件正文、任意 fetch 流及早期 popup 等仍有限制。
 报告将入口、输入、触发、状态、数据流、边界与联动逐项写明，示例见 [功能卡](../examples/web/feature-report.md)。`check_report.py --capture` 可核对 HTTP 会话/请求/动作/正文状态，不能证明因果关系。
 
 ## 读实现与测像素如何分工

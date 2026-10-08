@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test test_capture.mjs",
-    "check": "node capture.mjs --check"
+    "check": "node capture.mjs --check",
+    "test:cross": "node --test test_cross_browser.mjs"
   },
   "dependencies": {
     "playwright": "1.64.0"

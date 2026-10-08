@@ -672,6 +672,11 @@ def test_capture_report_references():
         locator = {"session_id": "s1", "request_id": "r1", "action_id": "a1", "body_status": "captured"}
         report = {"evidence": [{"id": "e1", "kind": "network", "locator": locator}]}
         assert check_report.validate_capture(report, root) == []
+        with open(os.path.join(root, "network.jsonl"), "w") as f:
+            json.dump({"session_id":"s1", "request_id":"r1", "body_status":"captured", "candidate_action_ids":"prefix-a1-suffix"}, f)
+        assert check_report.validate_capture(report, root), "string must not match as substring"
+        with open(os.path.join(root, "network.jsonl"), "w") as f:
+            json.dump(rows["network.jsonl"], f)
         for key, bad in (("session_id", "s2"), ("request_id", "missing"), ("action_id", "missing"), ("body_status", "empty")):
             original = locator[key]
             locator[key] = bad
@@ -698,6 +703,8 @@ def test_apk_profile_manifest_and_incomplete_set():
             archive.writestr("assets/flutter_assets/AssetManifest.bin", b"synthetic")
         result = apk_profile.profile([package], expected=["base.apk", "split_config.apk"], tool=None)
         assert result["coverage"]["missing"] == ["split_config.apk"]
+        ambiguous=apk_profile.profile([package], expected=["base.apk", "base.apk"], tool=None)
+        assert ambiguous["coverage"]["ambiguous_basenames"]
         assert result["packages"][0]["tool"]["status"] == "unavailable"
         assert result["packages"][0]["stack_clues"][0]["name"] == "Flutter"
         assert len(result["packages"][0]["sha256"]) == 64
@@ -748,6 +755,28 @@ def test_apk_empty_resource_package_does_not_trigger_invalid_queries():
             apk_profile.run_tool = original
         assert [r["kind"] for r in row["tool"]["commands"]] == ["manifest", "dex", "resources"]
         assert row["tool"]["status"] == "ok"
+
+
+def test_capture_stream_evidence_links():
+    import check_report
+    import json
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        rows = {"manifest.json": {"session_id": "s1", "complete": True},
+                "network.jsonl": {"session_id": "s1", "request_id": "http-1", "body_status": "unavailable"},
+                "actions.jsonl": {"session_id": "s1", "action_id": "a1"},
+                "streams.jsonl": {"session_id": "s1", "event_id": "event-2", "request_id": "page:cdp:1:0", "kind": "cdp-body", "body_status": "captured"}}
+        for name, row in rows.items():
+            with open(os.path.join(root, name), "w") as f:
+                json.dump(row, f)
+        locator = {"session_id": "s1", "request_id": "page:cdp:1:0", "event_id": "event-2", "body_status": "captured"}
+        report = {"evidence": [{"id": "e1", "kind": "network", "locator": locator}]}
+        assert check_report.validate_capture(report, root) == []
+        for field, bad in (("event_id", "missing"), ("request_id", "different"), ("body_status", "empty"), ("session_id", "s2")):
+            old = locator[field]
+            locator[field] = bad
+            assert check_report.validate_capture(report, root)
+            locator[field] = old
 
 
 if __name__ == "__main__":

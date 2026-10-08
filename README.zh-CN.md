@@ -221,3 +221,5 @@ python3 scripts/check_report.py examples/research/report.json
 
 
 案例：[Web 屏幕与功能](examples/web/wikipedia-case.md)、[三个参考的比较](examples/comparison/search-brief.md)、[自制 Web 流程](examples/web/feature-report.md)、[Android 静态追踪](examples/android-fixture/README.md)。
+
+无真机补验覆盖 Chromium Worker/OOPIF 流事件与 JSONP 正文、Firefox/WebKit HTTP/WS 和页面探针，以及实际模型路由评测。成绩与限制见[当日验证记录](evals/validation-2026-10-08.md)；Android 真机运行仍未验收。

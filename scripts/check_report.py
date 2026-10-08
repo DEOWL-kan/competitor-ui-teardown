@@ -186,7 +186,7 @@ def validate(report):
 
 
 def validate_capture(report, directory):
-    """Cross-check HTTP evidence only; matching timestamps do not prove causation."""
+    """Cross-check HTTP and stream references; timestamps do not prove causation."""
     def load(name, lines=False):
         with open(os.path.join(directory, name), "rb") as handle:
             raw = handle.read(32 * MAX_BYTES + 1)
@@ -199,6 +199,8 @@ def validate_capture(report, directory):
     manifest = load("manifest.json")
     requests = load("network.jsonl", True)
     actions = load("actions.jsonl", True)
+    needs_streams = any(isinstance(e, dict) and isinstance(e.get("locator"), dict) and "event_id" in e["locator"] for e in report.get("evidence", []))
+    streams = load("streams.jsonl", True) if needs_streams else []
     errors = []
     session = manifest.get("session_id")
     if not isinstance(session, str) or not session:
@@ -206,18 +208,22 @@ def validate_capture(report, directory):
     if manifest.get("complete") is not True:
         errors.append("capture: session did not finish")
     indexes = []
-    for rows, key in ((requests, "request_id"), (actions, "action_id")):
+    for rows, key in ((requests, "request_id"), (actions, "action_id"), (streams, "event_id")):
         index = {}
         for row in rows:
             if not isinstance(row, dict) or not isinstance(row.get(key), str):
                 raise ValueError("capture has malformed " + key)
             if row.get("session_id") != session:
                 errors.append("capture: cross-session " + key)
+            candidates = row.get("candidate_action_ids", [])
+            if not isinstance(candidates, list) or any(not isinstance(v, str) or not v for v in candidates):
+                errors.append("capture: candidate_action_ids must be a list of non-empty IDs")
+                continue
             if row[key] in index:
                 errors.append("capture: duplicate " + key)
             index[row[key]] = row
         indexes.append(index)
-    request_index, action_index = indexes
+    request_index, action_index, stream_index = indexes
     for evidence in report.get("evidence", []):
         if not isinstance(evidence, dict) or evidence.get("kind") != "network":
             continue
@@ -228,10 +234,16 @@ def validate_capture(report, directory):
         if locator.get("session_id") != session:
             errors.append(label + ": cross-session reference")
         request_id = locator.get("request_id")
-        row = request_index.get(request_id) if isinstance(request_id, str) else None
-        if row is None:
-            errors.append(label + ": HTTP request not found (stream events require manual review)")
+        event_id = locator.get("event_id")
+        if event_id is not None and (not isinstance(event_id, str) or not event_id):
+            errors.append(label + ": event_id must be non-empty text")
             continue
+        row = stream_index.get(event_id) if isinstance(event_id, str) else request_index.get(request_id) if isinstance(request_id, str) else None
+        if row is None:
+            errors.append(label + ": request/event not found")
+            continue
+        if event_id is not None and row.get("request_id") != request_id:
+            errors.append(label + ": mismatched stream request_id")
         for key in ("body_status", "page_id", "frame_id", "redirect_hop"):
             if key in locator and locator[key] != row.get(key):
                 errors.append(label + ": mismatched " + key)
@@ -260,7 +272,7 @@ def reject_constant(value):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report")
-    parser.add_argument("--capture", help="Cross-check HTTP links against a capture directory")
+    parser.add_argument("--capture", help="Cross-check HTTP/CDP/stream links against a capture directory")
     args = parser.parse_args()
     try:
         with open(args.report, "rb") as handle:

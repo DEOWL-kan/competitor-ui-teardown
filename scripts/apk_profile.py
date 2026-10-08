@@ -166,6 +166,7 @@ def inventory(filename, tool):
 
 def profile(files, expected=None, tool=None):
     basenames = [Path(f).name for f in files]
+    expected_ambiguous = expected is not None and len(set(expected)) != len(expected)
     expected = sorted(set(expected)) if expected is not None else None
     packages = [inventory(filename, tool) for filename in files]
     metadata = {"path": tool, "version": "unknown"}
@@ -182,7 +183,7 @@ def profile(files, expected=None, tool=None):
             "coverage": {"provided": basenames, "expected": expected,
                          "missing": sorted(set(expected or []) - set(basenames)),
                          "unexpected": sorted(set(basenames) - set(expected or basenames)),
-                         "ambiguous_basenames": len(set(basenames)) != len(basenames),
+                         "ambiguous_basenames": expected_ambiguous or len(set(basenames)) != len(basenames),
                          "scope": "matches supplied list only; dynamic modules and runtime behavior unknown"},
             "limitations": ["Static declarations and bundled files do not prove runtime availability.",
                             "Resources: package list, string configs and default string names only; other resource types/config values not decoded.",

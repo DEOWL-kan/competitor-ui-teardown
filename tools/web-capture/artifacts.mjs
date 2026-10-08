@@ -45,6 +45,10 @@ export class Privacy {
       try {return {format:'json',value:this.json(JSON.parse(text))};}
       catch {return {format:'invalid-json',value:this.mask(text)};}
     }
+    if(/javascript|ecmascript/i.test(mime)) {
+      const call=text.match(/^\s*(?:\/\*[^]*?\*\/\s*)?([A-Za-z_$][\w$]*(?:(?:\.[A-Za-z_$][\w$]*)|(?:\[\d+\]))*)\s*\(([^]*)\)\s*;?\s*$/);
+      if(call)try{return {format:'jsonp',callback:call[1],value:this.json(JSON.parse(call[2]))};}catch {}
+    }
     if(/x-www-form-urlencoded/i.test(mime)) return {format:'form',value:[...new URLSearchParams(text)].map(([k,v])=>[k,this.json(v,k)])};
     return {format:'text-shape',characters:text.length,value:this.mask(text)};
   }
@@ -79,8 +83,8 @@ export class Artifacts {
   }
   stream(event) {
     if(this.streams.length>=this.limits.maxStreamEvents) {this.dropped.stream_events++;return;}
-    const row={session_id:this.session,observed_at:new Date().toISOString(),...event};
-    this.streams.push(row);this.event(row);
+    const row={body_status:'not_requested',body:null,session_id:this.session,event_id:'event-'+(this.streams.length+1),observed_at:new Date().toISOString(),...(typeof event==='function'?event():event)};
+    this.streams.push(row);this.event(row);return row;
   }
   finish(extra={}) {
     for(const [name,rows] of [['network',this.records],['actions',this.actions],['streams',this.streams]]) fs.writeFileSync(path.join(this.out,name+'.jsonl'),rows.map(r=>JSON.stringify(r)).join('\n')+(rows.length?'\n':''),{mode:0o600});

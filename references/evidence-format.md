@@ -31,7 +31,7 @@ conditions/limitations 是字符串数组，允许为空但不能省略；observ
 kind 取 observation、network、code、document。
 locator 必需 target（URL/文件/录制定位）和 position（行/方法/时间/章节）。公开资料与用户说法另需 published_at（未知写 unknown），用户说法另需 author。
 network 仅允许 browser source，locator 另需 session_id、request_id、body_status；body_status 取 captured、empty、not_requested、unavailable、truncated。
-时间、页面、frame、action、redirect_hop、附件哈希可补在 locator 中；当前 v1 不读取附件或自动验证跨附件事件关系，实时抓包阶段再接入该校验。
+时间、页面、frame、action、redirect_hop、附件哈希可补在 locator 中；指定 --capture 时按下方规则交叉检查附件；不指定时仅检查报告本身。
 不要将 Cookie、令牌、原始个人输入或完整业务端点清单放进公开记录。
 
 ## claims
@@ -69,6 +69,6 @@ evidence_ids/alternatives 是数组；rationale 说明依据或未覆盖原因�
 
 这些断言保护记录的最低要求；不能通过伪造 source 来证明事实。原始材料仍需复核。
 
-## HTTP 附件交叉检查
+## HTTP / 流事件附件交叉检查
 
-`python3 scripts/check_report.py report.json --capture /outside/repo/capture` 额外核对 manifest、network.jsonl、actions.jsonl 的会话/请求/动作 ID、正文状态及提供的页面/帧/重定向字段。动作必须是记录中的时间窗口候选；匹配不证明因果。流式 CDP ID 尚不支持自动跨附件校验，需人工核对 streams.jsonl。
+`python3 scripts/check_report.py report.json --capture /outside/repo/capture` 额外核对 manifest、network.jsonl、actions.jsonl 的会话/请求/动作 ID、正文状态及提供的页面/帧/重定向字段。动作必须是记录中的时间窗口候选；匹配不证明因果。引用 streams.jsonl 时 locator 另带 event_id，校验器按事件 ID 核对其 request_id、会话、候选动作与正文状态。CDP ID 不等于 HTTP ID，不能将候选关联当作同一条记录。candidate_action_ids 必须是非空字符串组成的数组，字符串子串不算关联。

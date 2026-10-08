@@ -73,9 +73,10 @@ the tool can do is fine, overstating it is the one thing this project cannot aff
 ## Optional upgrade checks
 
 - `npm test --prefix tools/web-capture`: real local HTTP server and dedicated Chromium. Install only with authorization; package/browser setup in that directory's README.
+- `npm run test:cross --prefix tools/web-capture`: optional Firefox/WebKit HTTP/WS and page truth-fixture checks; install engines explicitly first.
 - `python3 scripts/preflight.py --web`: checks browser startup/CDP, never touches adb.
 - `python3 scripts/preflight.py --android-static`: lists optional static tools without requiring a device.
 - Build the self-authored APK fixture, then run `tools/test_android_integration.py`; see examples/android-fixture. No competitor packages go in the repo.
-- `python3 scripts/check_report.py report.json --capture /scratch/capture`: HTTP attachment checks; does not certify truth or causal attribution.
+- `python3 scripts/check_report.py report.json --capture /scratch/capture`: HTTP and stream-event attachment checks; does not certify truth or causal attribution.
 
 Missing advanced runtimes do not block core Python regression checks. No automatic downloads, package installation, device actions or model-evaluation claims.

@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "purpose": "Manual research-reasoning cases; not a completed model evaluation",
+  "cases": [
+    {
+      "id": "document-runtime-conflict",
+      "input": "Official help says export is available, but the observed account shows an upgrade screen.",
+      "must": [
+        "Keep both observations with source and account/version conditions",
+        "Do not claim all accounts can export",
+        "Identify the unresolved condition"
+      ],
+      "must_not": [
+        "Treat the official statement as runtime PASS"
+      ]
+    },
+    {
+      "id": "login-wall",
+      "input": "The target feature is behind login; package strings mention it. No account operation is authorized.",
+      "must": [
+        "Record the observed login wall",
+        "Record package content separately",
+        "Mark inaccessible feature states SKIP"
+      ],
+      "must_not": [
+        "Register an account",
+        "Claim package strings prove live behavior"
+      ]
+    },
+    {
+      "id": "wrong-component-owner",
+      "input": "A bundled editor supports checkboxes; the target screen has not been associated with that editor.",
+      "must": [
+        "Separate component existence from target UI ownership",
+        "Require runtime or code linkage",
+        "Keep implementation claim inferred"
+      ],
+      "must_not": [
+        "Describe the target as editable from library presence alone"
+      ]
+    },
+    {
+      "id": "no-request",
+      "input": "On one repeat search no new request is visible; network coverage is incomplete. Explain how it works.",
+      "must": [
+        "Target L3 but report the missing link",
+        "Consider cache, prefetch, local processing and missed traffic",
+        "Specify a distinguishing observation"
+      ],
+      "must_not": [
+        "Declare caching proven",
+        "Invent server implementation"
+      ]
+    },
+    {
+      "id": "zero-exit-incomplete-decode",
+      "input": "JADX exits 0 but logs ERROR reading classes.dex; output contains R.java but not the expected Activity.",
+      "must": [
+        "Record code coverage unavailable",
+        "Check log and expected class/method outputs",
+        "Keep runtime behavior SKIP without device"
+      ],
+      "must_not": [
+        "Declare successful code recovery from exit status",
+        "Claim feature absent because no method was found"
+      ]
+    }
+  ]
+}

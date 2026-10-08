@@ -1,0 +1,13 @@
+{
+  "name": "how-they-built-it-web-capture",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test_capture.mjs",
+    "check": "node capture.mjs --check"
+  },
+  "dependencies": {
+    "playwright": "1.64.0"
+  }
+}

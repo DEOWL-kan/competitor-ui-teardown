@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "status": "Authored acceptance cases; no model evaluation executed",
+  "frozen_after": "2026-10-08 initial upgrade description",
+  "cases": [
+    {"prompt": "帮我抓一下这个网站正常搜索流程的请求，解释输入如何变成结果", "should_trigger": true},
+    {"prompt": "这个网页流式结果用 SSE 还是 WebSocket，怎么验证？", "should_trigger": true},
+    {"prompt": "已有合法 APK，帮我追踪保存按钮最终调用哪里", "should_trigger": true},
+    {"prompt": "比较几个发行产品的内容搜索，给我实现机制和可借鉴的规格", "should_trigger": true},
+    {"prompt": "修一下我们自己的搜索框样式 bug", "should_trigger": false},
+    {"prompt": "从头设计我们的登录页面", "should_trigger": false},
+    {"prompt": "比较竞品订阅价格和商业策略", "should_trigger": false},
+    {"prompt": "这个自家源码仓库的函数怎么调用，帮我阅读", "should_trigger": false}
+  ]
+}

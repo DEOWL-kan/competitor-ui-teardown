@@ -5,7 +5,7 @@ because measuring beats guessing; the scripts are just the enforcement mechanism
 
 ## Setup
 
-None. Python 3.8+ and `ffmpeg`/`ffprobe` on PATH.
+Core analysis: Python 3.8+ and `ffmpeg`/`ffprobe` on PATH. Optional Web capture and Android static-tool integration have separate explicit setup (see below).
 
 ```bash
 python3 scripts/test_regressions.py     # the whole test suite, ~1s, no framework
@@ -13,7 +13,9 @@ python3 scripts/test_regressions.py     # the whole test suite, ~1s, no framewor
 
 **Standard library only.** No Pillow, no numpy, no pytest. Someone should be able to
 `curl` a single script onto a machine and have it work. A patch that adds a dependency
-needs to argue why a few lines of stdlib cannot do it.
+needs to argue why a few lines of stdlib cannot do it. Optional Web capture dependencies
+(Node/Playwright/Chromium) belong in their own tool directory; apkanalyzer/JADX are
+optional external analysis tools. Missing advanced tools must not break core scripts.
 
 ## Fixing a bug
 
@@ -67,3 +69,13 @@ the tool can do is fine, overstating it is the one thing this project cannot aff
 - Anything that downloads a package on its own, drives a store account, or touches DRM.
 - Competitor assets in the repository, in any form, for any reason.
 - Softening a documented limitation without measurements that justify it.
+
+## Optional upgrade checks
+
+- `npm test --prefix tools/web-capture`: real local HTTP server and dedicated Chromium. Install only with authorization; package/browser setup in that directory's README.
+- `python3 scripts/preflight.py --web`: checks browser startup/CDP, never touches adb.
+- `python3 scripts/preflight.py --android-static`: lists optional static tools without requiring a device.
+- Build the self-authored APK fixture, then run `tools/test_android_integration.py`; see examples/android-fixture. No competitor packages go in the repo.
+- `python3 scripts/check_report.py report.json --capture /scratch/capture`: HTTP attachment checks; does not certify truth or causal attribution.
+
+Missing advanced runtimes do not block core Python regression checks. No automatic downloads, package installation, device actions or model-evaluation claims.

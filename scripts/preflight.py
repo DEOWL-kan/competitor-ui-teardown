@@ -8,6 +8,8 @@ missing (the printed lines say what and how to install it).
     python3 scripts/preflight.py
 """
 import platform
+import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -26,6 +28,28 @@ HINTS = {
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--web", action="store_true", help="Check optional Chromium backend without touching adb")
+    mode.add_argument("--android-static", action="store_true", help="Check optional static tools without a device")
+    args = parser.parse_args()
+    if args.android_static:
+        for tool in ("apkanalyzer", "jadx", "java"):
+            print("{}: {}".format(tool, shutil.which(tool) or "unavailable (optional)"))
+        print("Core ZIP inventory remains available; no device was contacted.")
+        return 0
+    if args.web:
+        node = shutil.which("node")
+        if not node:
+            print("MISSING node; install optional Web runtime explicitly (references/web.md)")
+            return 1
+        capture = os.path.join(os.path.dirname(__file__), "..", "tools", "web-capture", "capture.mjs")
+        try:
+            result = subprocess.run([node, capture, "--check"], timeout=45)
+            return result.returncode
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print("Web backend unavailable: " + type(exc).__name__)
+            return 1
     os_name = platform.system()
     hints = HINTS.get(os_name, {})
     missing = []
@@ -66,4 +90,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

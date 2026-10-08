@@ -26,7 +26,7 @@
 | 过渡多长、曲线什么形状 | 录屏逐帧差分 |
 | 渐变有没有颗粒、能不能纯 CSS 画 | 相邻像素差统计 |
 | 光斑中心在哪 | 降采样网格上的色度峰值 |
-| 文字放上去对比度够不够 | 对实测极值做 WCAG 计算 |
+| 文字放上去对比度够不够 | 遍历解码 RGB 像素，报告最小对比度 |
 | 端侧还是云端、买了哪些 SDK | 包内原生库、域名和接口路径 |
 
 **能测的一律测，不能测的标明是推断。这个区分就是全部价值所在。**
@@ -128,7 +128,7 @@ adb pull <每一条路径> .
 python3 scripts/apk_assets.py base.apk --screen login        # 这一屏是什么做的
 python3 scripts/feature_probe.py *.apk --keyword transcri    # 这个功能是什么做的
                                                              # ⛔ split 要全传，
-                                                             #    原生库从不在 base.apk 里
+                                                             #    原生库可能在 base 或 ABI split 里
 
 adb shell am force-stop com.example.app                      # 冷启动，先起录屏
 adb shell screenrecord --time-limit 20 /sdcard/rec.mp4 && adb pull /sdcard/rec.mp4 .
@@ -172,13 +172,15 @@ python3 scripts/image_probe.py bg.png --grid 9x20 --contrast '#1E2C28'
 资源清单这一步 —— 也就是真正能定「视频还是五张图」的那一步 —— 整条链路不成立。
 iOS-first 的 App 只剩动效分析和像素分析。
 
-**录屏是变帧率的。** `adb shell screenrecord` 没有 `--fps` 选项，只在画面变化时出帧
-（实测：静止屏录 2 秒只得到 1 帧），却照样把文件标成 `r_frame_rate=30/1`。
-在平坦渐变上，重采样的假象会长得像真实运动。脚本现在能识别并告警（第 30 条踩坑），
-但告警的价值取决于你愿不愿意重跑。
+**经过帧率转换的片子会让分段失效。** 重复帧读起来像静止，会把一次转场劈成三段。
+`adb shell screenrecord` 没有 `--fps` 选项、只在画面变化时出帧（实测：静止屏录 2 秒只得 1 帧），
+所以把它重采样到固定网格会产生重复帧，升帧同理。脚本会报出有多少样本带这个签名、
+超过 2% 才下判断；⛔ 它不修复信号 —— 原始帧已经没了。**按你要的帧率原生录制，别做转换。**
 
 **缓动转场的时长读数偏短。** 对着一段已知 2.7 秒的交叉溶解实测，报出 2.16–2.38 秒，
-差额落进相邻的静止段。**转场时长当下界看**。`cycle length` 不受影响，要报数字就报它。
+差额落进相邻的静止段。该样本偏短，不代表普遍下界；阈值与短段合并也可能使读数偏长。`cycle length` 更稳（所有 fixture 和采样率下都是
+4.13–4.20s，真值 4.20s），但⛔ **不是免疫**：录制从第一段静止中途开始时那一段被截断，
+误差不相消。
 
 **细微运动需要更高的分析分辨率。** `frame_diff.py` 先降采样再差分，
 1080px 画面上 3px 的漂移在默认分辨率下只有 0.3px，会被平滑掉。
@@ -187,8 +189,15 @@ iOS-first 的 App 只剩动效分析和像素分析。
 **对比度要喂背景图，不是截图。** 截图上最暗的「背景」像素其实是正文字本身。
 而且只要文字和背景之间有任何蒙层，这些数字都不是上线值。
 
+对比度检查遍历原分辨率解码 RGB 像素，`--grid 0` 也有效；不判断文字位置、字号或透明合成，
+最小值不是无障碍通过结论。应使用文字下方已合成的不透明背景裁片。
+
+关键词默认按词干匹配；短词噪声多时可加 `--whole-word`（Unicode 词边界，数字和下划线属于词）。
+它不能排除其他语言中的同形词，仍须核对上下文。
+
 **Split APK 要看你问什么。** *视觉*拆解 `base.apk` 通常就够（六个 App 实测覆盖 99% 以上
-资源体积）；*功能*拆解则永远不够：原生库全在 `split_config.<abi>.apk` 里。
+资源体积，不代表所有应用）；目标素材缺失时继续查 split。*功能*拆解要分析 `pm path` 返回的全部 APK，
+原生库可能在 base 或 ABI split，feature split 可能含整个业务模块。
 `feature_probe.py` 接受任意多个包，报告里要写清你实际拿到了哪些 split。
 
 **屏幕分桶是关键词启发式。** 当线索看，别当清单，用**你自己产品的词汇**去 grep 完整路径。
@@ -199,3 +208,16 @@ iOS-first 的 App 只剩动效分析和像素分析。
 ## 许可
 
 MIT，见 [LICENSE](LICENSE)。欢迎贡献，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
+## 调研深度与证据记录
+
+普通调研默认 L2（行为），问“怎么实现”目标 L3（可追溯实现链路）；L4 比较解释和取舍，L5 提出我方方案。报告必须写实际达到的深度与缺口。见[调研流程](references/research-workflow.md)和[证据格式](references/evidence-format.md)。
+
+```sh
+python3 scripts/check_report.py examples/research/report.json
+```
+
+校验器检查结构与证据引用，不认证事实。配套示例是自制材料；可选 [Web 抓包后端](tools/web-capture/README.md) 已支持实时 HTTP 和已挂接页面的 WS/SSE，需独立运行环境；校验器本身不抓包。[APK 画像](references/apk-analysis.md)与 [JADX 定向追踪](references/code-tracing.md)已用自制安装包验证，尚无真机运行验收。
+
+
+案例：[Web 屏幕与功能](examples/web/wikipedia-case.md)、[三个参考的比较](examples/comparison/search-brief.md)、[自制 Web 流程](examples/web/feature-report.md)、[Android 静态追踪](examples/android-fixture/README.md)。

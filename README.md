@@ -28,7 +28,7 @@ error, and it went into a design document before anyone measured it.
 | How long is that transition, and what curve? | Per-frame difference over a screen recording |
 | Does that gradient have grain, or can I just draw it in CSS? | Neighbour-pixel delta statistics |
 | Where is the light actually centred? | Chroma peak on a downsampled grid |
-| Will my text still pass contrast on it? | WCAG against the measured extremes |
+| Will my text still pass contrast on it? | Minimum contrast across decoded RGB pixels |
 | On-device or cloud? Which SDKs did they buy? | Native libs, hosts and API paths in the package |
 
 Anything that cannot be measured is labelled as inference. **That distinction is
@@ -141,8 +141,8 @@ adb pull <each path> .
 
 python3 scripts/apk_assets.py base.apk --screen login        # what is this SCREEN made of
 python3 scripts/feature_probe.py *.apk --keyword transcri    # what is this FEATURE made of
-                                                             # (pass every split — native
-                                                             #  libs are never in base.apk)
+python3 scripts/feature_probe.py *.apk --keyword ble --whole-word  # optional word boundaries
+                                                             # pass every APK returned by pm path
 
 adb shell am force-stop com.example.app                      # record cold, recorder first
 adb shell screenrecord --time-limit 20 /sdcard/rec.mp4 && adb pull /sdcard/rec.mp4 .
@@ -157,7 +157,7 @@ python3 scripts/image_probe.py bg.png --grid 9x20 --contrast '#1E2C28'
 | `apk_assets.py` | Video, Lottie, or five JPEGs? Which screen owns each asset? |
 | `feature_probe.py` | On-device or cloud? Which SDKs did they buy instead of build? |
 | `frame_diff.py` | How long, what easing, does it loop, which region is even moving? |
-| `image_probe.py` | Grain or pure gradient? Where is the light? Does your text pass WCAG? |
+| `image_probe.py` | Grain or pure gradient? Where is the light? What is the minimum pixel contrast? |
 | `test_regressions.py` | One sample per bug this toolkit has ever had — run it after any change |
 
 `references/` holds the rest: `pitfalls.md` (thirty entries),
@@ -207,17 +207,21 @@ the asset inventory — the step that actually settles "video or five JPEGs" —
 cannot run at all. For iOS-first apps you get motion and pixel analysis and
 nothing else.
 
-**Screen recordings are variable frame rate.** `adb shell screenrecord` has no
+**Rate-converted clips break segmentation.** Duplicated frames read as static
+holds and split one transition into three. `adb shell screenrecord` has no
 `--fps` flag and emits a frame only when the screen changes — measured, 2s of a
-static screen produced a single frame — while still labelling the file
-`r_frame_rate=30/1`. On a flat gradient that makes resampling artifacts look
-like real motion. The script now detects this and says so (pitfall 30), but the
-warning is only as good as your willingness to re-run.
+static screen produced a single frame — so resampling one onto a fixed grid
+duplicates frames, as does upsampling. The script reports how many samples carry
+that signature and flags it above 2%; it does not repair the signal, because the
+original frames are gone. Record natively at the rate you want.
 
 **Eased transition durations read short.** Measured against a known 2.7s
 crossfade, the reported duration was 2.16–2.38s; the deficit lands in the
-adjacent static hold. Treat transition duration as a lower bound. `cycle length`
-is immune to this and is the number to quote.
+adjacent static hold. This sample read short; thresholds and short-segment
+merging can also overestimate duration. `cycle length` is steadier —
+it measured 4.13–4.20s against a known 4.20s across every fixture and sampling
+rate — but it is not immune: a recording that starts partway through the first
+hold truncates that segment, and the error does not cancel.
 
 **Subtle motion needs a higher resolution.** `frame_diff.py` downsamples before
 differencing, so 3px of drift on a 1080px capture is 0.3px at the default and
@@ -227,12 +231,16 @@ detect what it never resolved.
 **Contrast wants a background, not a screenshot.** Feed `image_probe.py
 --contrast` the extracted background asset. On a screenshot the darkest
 "background" pixel is the body text itself. And if any scrim sits between text
-and background, none of these numbers are the shipping values.
+and background, none of these numbers are the shipping values. The check uses all
+decoded RGB pixels, independently of `--grid`; it does not evaluate text placement,
+size or transparency. Use an opaque composited crop beneath the intended text.
+The reported minimum is not an accessibility verdict.
 
 **Split APKs: it depends what you are asking.** For a *visual* teardown
 `base.apk` is normally the whole answer — over 99% of asset weight across six
-shipping apps. For a *feature* one it never is: every native library sat in
-`split_config.<abi>.apk`. `feature_probe.py` takes as many packages as you pass
+shipping apps, not a guarantee. Inspect splits if target assets are missing.
+For a *feature* teardown analyse every APK returned by `pm path`; native libraries
+may live in base or ABI splits, and feature splits can contain whole modules. `feature_probe.py` takes as many packages as you pass
 it; say in the report which splits you actually had.
 
 **Screen buckets are a keyword heuristic.** Treat them as a lead, not an
@@ -246,3 +254,16 @@ supply.
 ## License
 
 MIT — see [LICENSE](LICENSE). Contributions welcome; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## Research depth and evidence records
+
+Research defaults to L2 (behavior); “how is it implemented?” targets L3 (a traceable execution path). L4 compares explanations and trade-offs; L5 proposes our own implementation. State achieved depth and gaps. See [the workflow](references/research-workflow.md) and [evidence format](references/evidence-format.md).
+
+```sh
+python3 scripts/check_report.py examples/research/report.json
+```
+
+The checker validates structure and evidence references, not factual truth. The bundled example is synthetic. Optional [Web capture](tools/web-capture/README.md) now records live HTTP and attached-target WS/SSE evidence; it requires its separate runtime. Optional [APK profiling](references/apk-analysis.md) and [targeted JADX tracing](references/code-tracing.md) are validated on self-authored packages; device behavior remains unverified. The checker does not itself capture traffic.
+
+
+Examples: [Web screen and feature](examples/web/wikipedia-case.md), [three-reference comparison](examples/comparison/search-brief.md), [synthetic Web flow](examples/web/feature-report.md), [Android static trace](examples/android-fixture/README.md).

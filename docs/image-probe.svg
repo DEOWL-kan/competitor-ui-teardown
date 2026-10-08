@@ -1,5 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="704" height="568" viewBox="0 0 704 568" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5">
-<rect width="704" height="568" rx="8" fill="#0d1117"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="704" height="534" viewBox="0 0 704 534" font-family="ui-monospace,SFMono-Regular,Menlo,Consolas,monospace" font-size="12.5">
+<rect width="704" height="534" rx="8" fill="#0d1117"/>
 <rect width="704" height="28" rx="8" fill="#161b22"/>
 <rect y="20" width="704" height="8" fill="#161b22"/>
 <circle cx="24" cy="14" r="5.5" fill="#ff5f56"/>
@@ -21,15 +21,13 @@
 <text x="18" y="290.0" fill="#c9d1d9" xml:space="preserve">  bottom-left   #163F49</text>
 <text x="18" y="307.0" fill="#c9d1d9" xml:space="preserve">  bottom-right  #163F49</text>
 <text x="18" y="324.0" fill="#c9d1d9" xml:space="preserve">  centre        #3C6F73</text>
-<text x="18" y="341.0" fill="#79c0ff" xml:space="preserve">## Contrast (WCAG; body text needs &gt;= 4.5, large/non-text &gt;= 3.0)</text>
-<text x="18" y="358.0" fill="#c9d1d9" xml:space="preserve">  background extremes (p10/p90): darkest #133943  lightest #64A8A6</text>
-<text x="18" y="375.0" fill="#c9d1d9" xml:space="preserve">  absolute extremes (incl. text/logo pixels): #153039 .. #7FD0C9</text>
-<text x="18" y="392.0" fill="#f85149" xml:space="preserve">  #FFFFFF  on darkest 12.40 | on lightest  2.73 | worst  2.73  FAIL</text>
-<text x="18" y="409.0" fill="#f85149" xml:space="preserve">  #8FA3A8  on darkest  4.71 | on lightest  1.04 | worst  1.04  FAIL</text>
-<text x="18" y="443.0" fill="#c9d1d9" xml:space="preserve">$ # the same image with a grain layer added — the verdict flips:</text>
-<text x="18" y="460.0" fill="#79c0ff" xml:space="preserve">## Grain</text>
-<text x="18" y="477.0" fill="#c9d1d9" xml:space="preserve">  neighbour delta  mean 6.77  sd 5.12</text>
-<text x="18" y="494.0" fill="#c9d1d9" xml:space="preserve">  non-zero 95.3%   &gt;=3 76.9%</text>
-<text x="18" y="511.0" fill="#3fb950" xml:space="preserve">  =&gt; HEAVY GRAIN — this is a texture layer, not a gradient</text>
-<text x="18" y="545.0" fill="#8b949e" xml:space="preserve"># ground truth — this image was generated: light at 30% x 25%, grain only in the second.</text>
+<text x="18" y="341.0" fill="#79c0ff" xml:space="preserve">## Contrast (all decoded RGB pixels; not an accessibility verdict)</text>
+<text x="18" y="358.0" fill="#c9d1d9" xml:space="preserve">  #FFFFFF  minimum pixel contrast  1.62  at #86DAD3</text>
+<text x="18" y="375.0" fill="#c9d1d9" xml:space="preserve">  #8FA3A8  minimum pixel contrast  1.00  at #67ABA9</text>
+<text x="18" y="409.0" fill="#c9d1d9" xml:space="preserve">$ # the same image with a grain layer added — the verdict flips:</text>
+<text x="18" y="426.0" fill="#79c0ff" xml:space="preserve">## Grain</text>
+<text x="18" y="443.0" fill="#c9d1d9" xml:space="preserve">  neighbour delta  mean 6.78  sd 5.13</text>
+<text x="18" y="460.0" fill="#c9d1d9" xml:space="preserve">  non-zero 95.3%   &gt;=3 76.9%</text>
+<text x="18" y="477.0" fill="#3fb950" xml:space="preserve">  =&gt; HEAVY GRAIN — this is a texture layer, not a gradient</text>
+<text x="18" y="511.0" fill="#8b949e" xml:space="preserve"># ground truth — this image was generated: light at 30% x 25%, grain only in the second.</text>
 </svg>

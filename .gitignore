@@ -18,3 +18,7 @@ shots/
 *.webp
 __pycache__/
 .DS_Store
+
+# Optional browser analysis runtime; never capture into the repository.
+node_modules/
+tools/web-capture/.browsers/

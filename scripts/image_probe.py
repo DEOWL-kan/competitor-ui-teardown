@@ -3,7 +3,7 @@
 
 Answers the questions you need before you can reproduce a competitor's
 background/visual: is it a flat gradient or does it carry grain? where is the
-light centred? what is the colour ramp? does text still pass contrast on it?
+light centred? what is the colour ramp? what is the minimum pixel contrast for a supplied foreground?
 
 Requires ffmpeg/ffprobe on PATH. Deliberately stdlib-only otherwise — Pillow is
 not installed on many machines and this has to work everywhere.
@@ -148,19 +148,6 @@ def saturation_peak(data, gw, gh):
     return best
 
 
-def background_extremes(cells):
-    """Darkest/lightest of the background, ignoring foreground marks.
-
-    p10/p90, not min/max. On a screenshot the darkest cell is the body text
-    itself: measured on a real sign-in screen, min was the black headline
-    (L=0.009) while p10 was L=0.236 — so #111111 text got scored against
-    #16181A text and "FAILED" contrast against itself. Returns
-    (darkest, lightest, absolute_darkest, absolute_lightest).
-    """
-    cells = sorted(cells, key=luminance)
-    return cells[len(cells) // 10], cells[len(cells) * 9 // 10], cells[0], cells[-1]
-
-
 def peak_role(peak_hex, cells):
     """Is the chroma peak the light source, or the far end of the ramp?
 
@@ -180,7 +167,7 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("image")
     ap.add_argument("--grid", default="9x20", help="downsample grid, e.g. 9x20 (default) or 0 to skip")
-    ap.add_argument("--contrast", help="comma-separated foreground hex colours to test against extremes")
+    ap.add_argument("--contrast", help="comma-separated foreground hex colours to test against all decoded pixels")
     ap.add_argument("--hue", action="store_true", help="print HSL for sampled colours")
     a = ap.parse_args()
 
@@ -231,21 +218,17 @@ def main():
                 hh, ll, ss = colorsys.rgb_to_hls(r, gg, b)
                 print(f"  {nm:<13} H{hh*360:6.1f}  S{ss*100:5.1f}  L{ll*100:5.1f}")
 
-        if a.contrast:
-            cells = [hexof(small[(y*gw+x)*3], small[(y*gw+x)*3+1], small[(y*gw+x)*3+2])
-                     for y in range(gh) for x in range(gw)]
-            darkest, lightest, abs_d, abs_l = background_extremes(cells)
-            print(f"\n## Contrast (WCAG; body text needs >= 4.5, large/non-text >= 3.0)")
-            print(f"  background extremes (p10/p90): darkest {darkest}  lightest {lightest}")
-            print(f"  absolute extremes (incl. text/logo pixels): {abs_d} .. {abs_l}")
-            for fg in [c.strip() for c in a.contrast.split(",")]:
-                cd, cl = contrast(fg, darkest), contrast(fg, lightest)
-                worst = min(cd, cl)
-                mark = "AA ok" if worst >= 4.5 else ("3:1 only" if worst >= 3.0 else "FAIL")
-                print(f"  {fg}  on darkest {cd:5.2f} | on lightest {cl:5.2f} | worst {worst:5.2f}  {mark}")
-            print("  Reminder: if any overlay/scrim sits between text and this background,")
-            print("  these numbers are NOT the shipping values — recompute on composited pixels.")
-            print("  Best input is the extracted background asset, not a screenshot with text on it.")
+    if a.contrast:
+        colours = {full[i:i + 3] for i in range(0, len(full), 3)}
+        cells = [hexof(*rgb) for rgb in colours]
+        print("\n## Contrast (all decoded RGB pixels; not an accessibility verdict)")
+        for fg in [c.strip() for c in a.contrast.split(",")]:
+            bg = min(cells, key=lambda c: contrast(fg, c))
+            worst = contrast(fg, bg)
+            print(f"  {fg}  minimum pixel contrast {worst:5.2f}  at {bg}")
+        print("  Use an opaque, composited background crop beneath the intended text.")
+        print("  Text placement, size, overlays and transparency are not evaluated.")
+        print("  A screenshot containing text compares that text against itself.")
 
 
 if __name__ == "__main__":

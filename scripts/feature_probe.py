@@ -271,9 +271,9 @@ def collect(paths):
 def report_native(native):
     print("## Native libraries — what the app can do on the device itself")
     if not native:
-        print("  none found.")
-        print("  ⚠️  If you only passed base.apk, that is expected and MEANS NOTHING —")
-        print("      native libs live in split_config.<abi>.apk. Pull the splits and re-run.")
+        print("  none found in the analysed packages.")
+        print("  Native libraries may live in base or ABI splits (split_config.<abi>.apk).")
+        print("  Check every APK returned by pm path; missing splits are uncovered.")
         return
     for lib, size, src in sorted(native, key=lambda r: -r[1]):
         note = next((m for pat, m in LIB_MEANING if re.search(pat, lib, re.I)), "")
@@ -417,16 +417,21 @@ def report_api(strings):
     print("     feature areas in your report; the raw list is not a deliverable.")
 
 
-def report_keyword(strings, terms):
+def report_keyword(strings, terms, whole_word=False):
     print(f"\n## Strings matching {terms}")
     hits = collections.defaultdict(set)
     low = [t.lower() for t in terms]
+    patterns = [re.compile(r"(?<!\w)" + re.escape(t) + r"(?!\w)") for t in low] if whole_word else []
     for text, where, _ in strings:
         if len(text) < 3:
             continue
         t = text.lower()
-        for term in low:
-            pos = t.find(term)
+        for index, term in enumerate(low):
+            if whole_word:
+                match = patterns[index].search(t)
+                pos = match.start() if match else -1
+            else:
+                pos = t.find(term)
             if pos < 0:
                 continue
             # Don't drop long lines — a minified bundle is one 200KB string and the
@@ -453,6 +458,8 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("apks", nargs="+", help="base.apk AND every split you pulled")
     ap.add_argument("--keyword", help="comma-separated stems to hunt, e.g. transcri,chapter")
+    ap.add_argument("--whole-word", action="store_true",
+                    help="match literal keywords bounded by non-word characters (Unicode; underscore is a word character)")
     ap.add_argument("--section", help=f"comma-separated subset of {','.join(SECTIONS)}")
     a = ap.parse_args()
 
@@ -469,15 +476,17 @@ def main():
     if "api" in want:
         report_api(strings)
     if a.keyword and "keyword" in want:
-        report_keyword(strings, [t.strip() for t in a.keyword.split(",") if t.strip()])
+        report_keyword(strings, [t.strip() for t in a.keyword.split(",") if t.strip()], a.whole_word)
 
     print("\n## Before any of this becomes a claim")
     print("  Everything above is STATIC evidence: it proves the code is in the package,")
     print("  ⛔ not that the feature is live, reachable, or on for every user.")
     print("  Drive the feature on a real device, then label each finding:")
     print("    [device]   you saw it happen        [package]  traced to a file above")
+    print("    [public-source] official statement + URL/date (not device verification)")
+    print("    [user-report] user statement + author/URL/date (not reproduced here)")
     print("    [inferred] the evidence does not carry the claim — including when you")
-    print("               have both other tags but they support a weaker statement")
+    print("               have multiple tags but they support a weaker statement")
 
 
 if __name__ == "__main__":

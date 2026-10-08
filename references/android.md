@@ -17,7 +17,7 @@ adb shell ps -A | grep -iE '<pkg1>|<pkg2>'
 adb shell dumpsys activity activities | grep -m1 topResumedActivity
 ```
 
-设备断开时 `adb` 会报 `no devices/emulators found`。重新插线或 `adb kill-server && adb start-server`。
+设备断开时先检查连接与授权。共用设备环境不要直接重启 adb server，以免中断其他会话。
 
 ## 截图与录屏
 
@@ -31,7 +31,7 @@ adb shell rm /sdcard/rec.mp4                            # 用完清掉，别留�
 录屏注意：
 - `--time-limit` 最大 180 秒，但拆解动效 **8–15 秒足够**，太长反而难分析
 - 循环类动效至少要录到**两个完整周期**，否则算不出周期长度
-- 录之前先让目标界面**停在那一屏**，别把导航过程录进去
+- 稳态录制先停在目标屏；入场动效必须先起录再冷启动，两种样本分开记录。
 
 ## 启动与导航
 
@@ -47,21 +47,19 @@ adb shell input swipe <x1> <y1> <x2> <y2> <ms>                    # 滑动
 
 ## 取安装包
 
-**前提：已经取得用户授权**（见 SKILL.md 的授权表）。
-
-设备上已装的：
+设备上已安装的包可只读拉取；从公开渠道下载免费安装包须先取得授权并核版本。禁止操作商店账号。
+先列出全部路径，包与中间素材保存在仓库外：
 
 ```bash
-P=$(adb shell pm path <pkg> | head -1 | sed 's/package://' | tr -d '\r')
-adb shell ls -la "$P"          # 先看体积，几十 MB 是正常的
-adb pull "$P" app.apk
+adb shell pm path <pkg>
+# 对输出中的每条 package: 路径逐条执行（去掉 package: 前缀）
+adb pull '<完整路径>' '<仓库外分析目录>/'
 ```
 
-拆分 APK（`pm path` 返回多行 `base.apk` + `split_*.apk`）时，资源通常在 `base.apk` 里，
-先拉 base 就够；确实找不到资源再拉 split。
+功能/技术调研传入每个已取得 APK，报告实际覆盖的包。视觉分析可先看 base，
+目标素材缺失时继续检查 split；单体 APK 的原生库也可以位于 base。
 
-设备上没装的：⛔ **不要替用户操作 Google Play 账号**。请用户自己在设备上安装，
-装好之后按上面的流程从设备拉取。
+设备没有安装时，可由用户自行安装，或授权后从公开渠道取得免费包，按 SKILL.md 核验版本与来源。
 
 ## 读安装包
 
@@ -110,3 +108,7 @@ rm -rf ./out ./probe app.apk
 
 需要长期留存的**只有你自己做的分析图**（拼图、曲线、对照），
 放进归档目录并配一个 README 写明来源与「仅供分析、禁止用作素材」。
+
+## 可选静态分析
+
+设备暂不可用但已有合法 APK 时，可先运行 [apk_profile](apk-analysis.md) 并按 [代码追踪流程](code-tracing.md) 阅读自制或授权样本。工具不会自动取包；实时表现仍需设备证据。

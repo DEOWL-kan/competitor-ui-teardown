@@ -75,7 +75,7 @@ PY
       --title "frame_diff.py — motion rhythm, measured against a known answer"
 
 { echo "\$ python3 scripts/image_probe.py bg.png --contrast '#FFFFFF,#8FA3A8'"
-  python3 scripts/image_probe.py "$TMP/flat.png" --grid 0 --contrast '#FFFFFF,#8FA3A8' | tail -n +2
+  python3 scripts/image_probe.py "$TMP/flat.png" --grid 0 | tail -n +2
   python3 scripts/image_probe.py "$TMP/flat.png" --contrast '#FFFFFF,#8FA3A8' | sed -n '/chroma peak/,/^  centre/p'
   python3 scripts/image_probe.py "$TMP/flat.png" --contrast '#FFFFFF,#8FA3A8' | sed -n '/## Contrast/,/#8FA3A8/p'
   echo

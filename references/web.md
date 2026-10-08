@@ -1,124 +1,66 @@
-# 拆解网页产品
+# Web 页面与功能取证
 
-**网页比 App 好拆得多**，而且很多人没意识到这一点：样式是明文的。
-App 的规格要从像素反推，网页的规格可以**直接读出来** —— 不用猜时长、不用取色、不用量间距。
+先明确要拆的区域、视口、主题和功能状态。Web 实测属于 `[浏览器]`；公开帮助属于 `[公开资料]`，两者不能替代。
+深度和报告结构遵循 [research-workflow.md](research-workflow.md)。
 
-所以拆网页时，⛔ 不要一上来就截图分析像素。先把明文的拿走。
+## 当前可执行能力：页面快照
 
-## 一、直接读规格
-
-用浏览器自动化或开发者工具执行下面这些。拿到的是**作者写的原值**，不是你的估计值。
-
-### 背景是怎么做的
+`scripts/web_probe.js` 是浏览器原生脚本。通过允许执行自有脚本的浏览器工具或开发者工具加载后运行：
 
 ```js
-const el = document.querySelector('<选择器>');
-const s = getComputedStyle(el);
-({
-  background: s.backgroundImage,      // 渐变的完整定义，直接可抄
-  color: s.backgroundColor,
-  filter: s.filter,
-  backdropFilter: s.backdropFilter,   // 毛玻璃就在这
-  mixBlendMode: s.mixBlendMode,
-  boxShadow: s.boxShadow,
-})
+webProbe({selector: '#target', maxElements: 200})
 ```
 
-`backgroundImage` 里如果是 `radial-gradient(...)`，那就是**完整的光斑规格**：位置、尺寸、色标全在里面。
-App 那边要靠降采样网格反推的东西，这里是白送的。
+返回 JSON 可序列化对象：
 
-### 动效的真实参数
+- 采集时间、视口、DPR、滚动位置、语言和系统配色偏好。
+- 指定区域的元素矩形、计算样式、可读 CSS 自定义属性和伪元素样式。
+- 被采元素的可见动画状态、整体 timing 及 keyframes 的分段 easing。
+- 当前页面 Resource Timing 清单，最多 200 项；超出元素/资源上限会明确标记。
+- 无匹配、无效参数、iframe/封闭 shadow root 等覆盖说明。
 
-```js
-// 页面上所有正在跑的动画，连时长和曲线一起
-document.getAnimations().map(a => ({
-  name: a.animationName || a.transitionProperty,
-  duration: a.effect?.getTiming().duration,
-  easing:   a.effect?.getTiming().easing,
-  delay:    a.effect?.getTiming().delay,
-  iterations: a.effect?.getTiming().iterations,
-  target: a.effect?.target?.className,
-}))
+`getComputedStyle` 返回解析后的值，不等于作者源码。CSS 变量只是已采元素上浏览器暴露的变量；不是完整 design token 表。每个元素/伪元素的 CSS 变量最多保留 64 项，variables_total 和 variables_truncated 记录总量与截断；需要某个未采变量时另行定向读取。
+探针遍历开放 shadow root；不进入 iframe，不宣称识别封闭 shadow root。默认 maxElements=200，最大 10000；只对目标区域运行。
+固定截图由浏览器工具保存，再与快照时间和状态绑定；探针不自行截图或点击。
+
+不采输入值与 textContent，URL 去掉 query/hash/凭据；但元素 ID、URL 路径、CSS 图片地址或变量仍可能含敏感内容。
+原始产物保存在仓库外，公开前人工复核；这不是自动完整脱敏工具。
+
+## 功能与网络：不能用资源清单替代抓包
+
+探针没有请求方法、请求头/正文、完整响应、WebSocket 帧或 SSE 事件。
+Resource Timing 的 0 大小可能来自缓存或访问限制；条目也可能已被浏览器缓冲淘汰。
+页面没有新条目不证明无网络交互，更不证明本地计算或应用缓存。
+
+完整功能研究应记录：入口/前置、输入/校验、触发规则、加载/成功/空/失败/取消、边界、并发/恢复和联动。
+操作前开始观察，保存 baseline→动作→等待目标状态→after；比较操作、请求和 UI，区分时间相关与因果证据。
+可选实时后端见 [tools/web-capture](../tools/web-capture/README.md)：隔离的 Playwright/Chromium 记录 HTTP、重定向、传输失败与正文状态，并通过 CDP 记录 WebSocket 帧及原生 EventSource 消息。页面探针继续只负责静态快照。
+
+操作记录包含前后快照、时间窗口及候选请求。先使用 `demo.mjs` 验证搜索/分页、表单和流式自制样本，再按授权研究真实目标。输出必须在仓库外；未知大小、压缩响应、文件上传和跨 target 流式事件有明确覆盖限制。
+报告将入口、输入、触发、状态、数据流、边界与联动逐项写明，示例见 [功能卡](../examples/web/feature-report.md)。`check_report.py --capture` 可核对 HTTP 会话/请求/动作/正文状态，不能证明因果关系。
+
+## 读实现与测像素如何分工
+
+公开脚本与 source map 的定向阅读见 [web-code-tracing.md](web-code-tracing.md)。
+参数可读时先读，再回到画面验证。canvas/WebGL/video 或不可读动画可以录屏、抽帧和帧差分，注明采样限制。
+`backgroundImage` 的 URL 不一定是静态图，也可能是 SVG；样式声明不能独自证明绘制机制或实际资源用途。
+动画可能在滚动/点击后才出现；一次空 `getAnimations()` 不能证明没有动画。
+
+## 自制样本验证
+
+从仓库根启动仅监听本机的静态服务：
+
+```sh
+python3 -m http.server 8765 --bind 127.0.0.1
 ```
 
-这一条能直接给出「2700ms / cubic-bezier(.2,.8,.2,1) / infinite」这种精确到能照抄的结果。
-⛔ 别再去录屏算帧差分了 —— 那是 App 才需要的迂回手段。
+打开 `http://127.0.0.1:8765/references/web-validation.html`。
+预期页面显示 PASS，覆盖尺寸、样式、伪元素、开放 shadow root、关键帧 easing、iframe 提示、截断和无效输入。
+删除 keyframes 采集后应显示 FAIL: keyframe easing retained；恢复后重新 PASS。
+这是真值已知的本地页面测试，不代表真实网站和各种浏览器已全部验收。
 
-### 字体与排版尺度
+## 比较与边界
 
-```js
-[...document.querySelectorAll('h1,h2,h3,p,button,a')].map(e => {
-  const s = getComputedStyle(e);
-  return `${e.tagName} ${s.fontSize}/${s.lineHeight} w${s.fontWeight} ls${s.letterSpacing} ${s.fontFamily.split(',')[0]}`;
-}).filter((v,i,a) => a.indexOf(v) === i)   // 去重，得到的就是这个页面的字阶表
-```
-
-### 设计变量（如果对方用了 CSS 变量）
-
-```js
-const r = getComputedStyle(document.documentElement);
-[...document.styleSheets].flatMap(ss => { try { return [...ss.cssRules] } catch { return [] } })
-  .flatMap(rule => rule.style ? [...rule.style] : [])
-  .filter(p => p.startsWith('--'))
-  .filter((v,i,a) => a.indexOf(v) === i)
-  .map(v => `${v}: ${r.getPropertyValue(v).trim()}`)
-```
-
-用了设计系统的站点，这一步**等于直接拿到对方的 design token 表**。
-
-## 二、资源清单
-
-对应 App 那边的 `apk_assets.py`。看资源类型能立刻判断「背景是视频还是图」：
-
-```js
-performance.getEntriesByType('resource')
-  .filter(r => /\.(png|jpe?g|webp|avif|mp4|webm|svg|woff2?|json)/.test(r.name))
-  .map(r => ({ url: r.name.split('/').pop(), kb: Math.round(r.transferSize/1024), type: r.initiatorType }))
-  .sort((a,b) => b.kb - a.kb)
-  .slice(0, 30)
-```
-
-也可以离线看：
-
-```bash
-curl -s <url> | grep -oE 'src="[^"]+\.(mp4|webm|png|jpg|webp)"' | sort -u
-```
-
-⚠️ 现代站点大量用懒加载和 CDN 转换（`?w=800&fmt=webp`），首屏清单未必完整 —— 滚动一遍再取。
-
-## 三、什么时候还是要测像素
-
-明文读不到的情况：
-
-- 背景是**一张图**而不是渐变 → 下载那张图，用 `image_probe.py` 分析（有没有颗粒、光斑在哪）
-- 效果来自 **canvas / WebGL / video** → 只能录屏，用 `frame_diff.py` 量节奏
-- 关键视觉被**打包进图片**（很多营销页把整块内容做成图）
-
-判断方法很简单：`backgroundImage` 是 `url(...)` 就是图，是 `linear/radial-gradient(...)` 就是代码画的。
-
-## 四、⚠️ 网页特有的坑
-
-**别把概念稿当成发行产品。** 设计社区（Dribbble、Behance）上的漂亮登录页，很多是
-**没有工程约束的概念图** —— 没有真实文案长度、没有多语言、没有加载态、没有错误态、
-没有无障碍要求。照着它做，到实现阶段会发现处处不成立。
-
-判断依据：能不能**在真实域名上打开并交互**。不能，就只当情绪板，⛔ 不当规格来源。
-
-**响应式会改变结论。** 你在 1440px 宽看到的布局，可能和移动端完全是两套。
-拆解前先明确要拆哪个断点，`resize` 之后重新取一遍计算样式。
-
-**深色模式同理。** 取色前先确认当前处于哪个模式，两套值都要取。
-
-**首屏和滚动后不是一回事。** 很多动效是 `IntersectionObserver` 触发的，
-不滚动就取不到 —— `getAnimations()` 在动画没开始时返回不了它。
-
-## 五、边界
-
-网页的样式是公开可见的，读取计算样式没有额外的授权问题。但结论一样：
-
-- 借鉴**机制**（渐变结构、动效曲线、字阶比例）✅
-- 复制**素材**（图片、字体文件、插画、文案）⛔
-- 整页克隆 ⛔
-
-拿到 `cubic-bezier(.2,.8,.2,1)` 这种参数不构成抄袭 —— 它是物理规律级别的通用值。
-把对方的英雄图下载下来用，是另一回事。
+响应式、深色模式、滚动与加载状态分别采样；不同条件的值不能拼成一个不存在的页面。
+只把真实可访问产品当作发行参考；概念稿用于方向，不作实现规格证据。
+只观察任务授权的正常交互，不按发现的端点主动探测/重放。借鉴机制，不能把竞品素材、脚本或原始日志提交仓库。

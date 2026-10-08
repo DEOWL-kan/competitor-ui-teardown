@@ -1,0 +1,40 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Self-authored Web probe validation</title>
+<style>
+#target { width: 240px; padding: 10px; box-sizing: border-box; color: rgb(20, 30, 40); --accent: #123456; }
+#target::before { content: "fixture"; color: rgb(1, 2, 3); }
+#moving { animation: slide 10s linear infinite; }
+@keyframes slide { from { transform: translateX(0); animation-timing-function: ease-in; } to { transform: translateX(10px); } }
+</style>
+<div id="target"><button id="moving">Synthetic action</button><div id="shadow"></div><iframe title="unreadable frame" sandbox srcdoc="private frame"></iframe></div>
+<pre id="result">RUNNING</pre>
+<script src="../scripts/web_probe.js"></script>
+<script>
+const shadow = document.querySelector('#shadow').attachShadow({mode:'open'});
+shadow.innerHTML = '<span id="inside">Open shadow fixture</span>';
+window.addEventListener('load', () => {
+  try {
+    if (typeof webProbe !== 'function') throw Error('webProbe is not implemented');
+    const report = webProbe({selector:'#target', maxElements:20});
+    const check = (condition, message) => { if (!condition) throw Error(message); };
+    check(report.elements[0].rect.width === 240, 'known border-box width');
+    check(report.elements[0].style.color === 'rgb(20, 30, 40)', 'computed color');
+    check(report.elements[0].pseudo.before.color === 'rgb(1, 2, 3)', 'pseudo style');
+    check(report.elements.some(e => e.id === 'inside'), 'open shadow nodes');
+    check(report.animations.some(a => a.keyframes.some(k => k.easing === 'ease-in')), 'keyframe easing retained');
+    check(report.warnings.some(w => w.includes('iframe')), 'frame coverage is explicit');
+    const small = webProbe({selector:'#target', maxElements:2});
+    check(small.truncated && small.elements.length === 2, 'truncation declared');
+    check(webProbe({selector:'#missing'}).elements.length === 0, 'no match is safe');
+    check(webProbe({selector:'['}).warnings.length > 0, 'invalid selector diagnosed');
+    check(webProbe({maxElements:0}).warnings.length > 0, 'invalid limit diagnosed');
+    check(!JSON.stringify(report).includes('Open shadow fixture'), 'does not capture text content');
+    document.querySelector('#result').textContent = 'PASS: width, styles, pseudo, shadow, animation, iframe, truncation, invalid inputs, text minimization';
+    window.probeTest = {ok:true, report};
+  } catch (error) {
+    document.querySelector('#result').textContent = 'FAIL: ' + error.message;
+    window.probeTest = {ok:false, error:error.message};
+  }
+});
+</script>

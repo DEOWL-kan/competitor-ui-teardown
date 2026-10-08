@@ -39,19 +39,26 @@ def test_short_token_boundaries():
     assert apk_assets.classify_screen("assets/empty_text/Inter-Bold.ttf", "font") is None
 
 
-def test_percentile_extremes_ignore_text():
-    """pitfall 10 — one very dark cell (text) must not become 'the background'.
+def test_contrast_checks_rare_and_middle_pixels_without_grid():
+    """Sparse and middle-luminance backgrounds must not get a false pass."""
+    from unittest.mock import patch
+    for cells, fg in [(["#000000"] * 179 + ["#FFFFFF"], "#FFFFFF"),
+                      (["#000000", "#757575", "#FFFFFF"] * 60, "#757575"),
+                      (["#000000"] * 180, "#FFFFFF")]:
+        raw = bytes.fromhex("".join(c[1:] for c in cells))
+        expected = "21.00" if len(set(cells)) == 1 else "1.00"
+        for grid in ("0", "9x20"):
+            with patch.object(sys, "argv", ["image_probe.py", "bg.png", "--grid", grid,
+                                            "--contrast", fg]), \
+                 patch.object(image_probe, "require_ffmpeg"), \
+                 patch.object(image_probe, "dimensions", return_value=(9, 20, "rgb24")), \
+                 patch.object(image_probe.os.path, "getsize", return_value=len(raw)), \
+                 patch.object(image_probe, "raw_rgb", return_value=raw):
+                out = _capture(image_probe.main)
+            assert re.search(r"minimum pixel contrast\s+" + re.escape(expected), out), out
+            assert "AA ok" not in out, out
+            assert "not an accessibility verdict" in out, out
 
-    170 background cells plus 10 near-black text cells: the shape of a 9x20
-    grid taken off a real screenshot with a headline on it.
-    """
-    cells = ["#E3E7EE"] * 170 + ["#16181A"] * 10
-    darkest, lightest, abs_d, abs_l = image_probe.background_extremes(cells)
-    assert darkest == "#E3E7EE", darkest      # background, not the headline
-    assert abs_d == "#16181A", abs_d          # still reported, just not used
-    # the whole point: the verdict flips depending on which pair you use
-    assert image_probe.contrast("#111111", abs_d) < 1.5
-    assert image_probe.contrast("#111111", darkest) > 4.5
 
 
 def test_chroma_peak_role():
@@ -489,6 +496,70 @@ def test_react_native_bundle_is_actually_read():
     assert "transcription" in _capture(feature_probe.report_keyword, strings, ["transcription"])
 
 
+def test_missing_native_libraries_do_not_imply_missing_splits():
+    out = _capture(feature_probe.report_native, [])
+    assert "analysed packages" in out, out
+    assert "base or ABI splits" in out, out
+    assert "MEANS NOTHING" not in out, out
+
+
+def test_research_report_preserves_evidence_boundaries():
+    import copy
+    import importlib
+    import json
+    import pathlib
+    try:
+        checker = importlib.import_module("check_report")
+    except ImportError as exc:
+        raise AssertionError("report checker is not implemented") from exc
+    path = pathlib.Path(__file__).resolve().parent.parent / "examples/research/report.json"
+    report = json.loads(path.read_text())
+    assert checker.validate(report) == [], checker.validate(report)
+    mutations = [
+        (lambda r: r.update(schema_version=True), "schema_version"),
+        (lambda r: r["evidence"].append(copy.deepcopy(r["evidence"][0])), "duplicate"),
+        (lambda r: r["claims"][0].update(evidence_ids=["missing"]), "evidence_ids"),
+        (lambda r: r["claims"][0].update(question_id="missing"), "question_id"),
+        (lambda r: r["claims"][0].update(scope="runtime", status="PASS"), "runtime"),
+        (lambda r: r["claims"][0].update(basis="inferred", status="PASS"), "inferred"),
+        (lambda r: r["claims"][0].update(evidence_ids=[]), "evidence_ids"),
+        (lambda r: r["evidence"][0].update(locator={}), "locator"),
+        (lambda r: r["evidence"][0].update(observed_at="yesterday"), "observed_at"),
+        (lambda r: r["context"].update(achieved_depth="L1", gaps=[]), "gaps"),
+        (lambda r: r["questions"].append({"id": "q2", "text": "Unanswered?", "critical": True}), "q2"),
+        (lambda r: r.update(evidence=[None]), "evidence[0]"),
+    ]
+    for mutate, diagnostic in mutations:
+        changed = copy.deepcopy(report)
+        mutate(changed)
+        errors = checker.validate(changed)
+        assert any(diagnostic in error for error in errors), (diagnostic, errors)
+    assert checker.validate([]), "a report must be an object"
+    assert checker.validate({}), "empty report must fail"
+
+
+def test_research_report_cli_rejects_invalid_json():
+    import pathlib
+    import subprocess
+    import tempfile
+    script = pathlib.Path(__file__).resolve().parent / "check_report.py"
+    fixture = script.parent.parent / "examples/research/report.json"
+    good = subprocess.run([sys.executable, str(script), str(fixture)],
+                          capture_output=True, text=True, timeout=10)
+    assert good.returncode == 0 and "not" not in good.stderr, good.stderr
+    with tempfile.TemporaryDirectory() as directory:
+        path = pathlib.Path(directory) / "report.json"
+        for payload, message in [(b'{"schema_version":1,"schema_version":1}', "duplicate"),
+                                 (b'{"schema_version":NaN}', "non-JSON"),
+                                 (b'\xff', "codec"),
+                                 (b'[]', "expected an object")]:
+            path.write_bytes(payload)
+            result = subprocess.run([sys.executable, str(script), str(path)],
+                                    capture_output=True, text=True, timeout=10)
+            assert result.returncode == 1 and message in result.stderr, result.stderr
+            assert "Traceback" not in result.stderr, result.stderr
+
+
 def test_report_keyword_shows_the_hit_and_its_source():
     """feature_probe — an empty keyword report was a surviving mutation."""
     out = _capture(feature_probe.report_keyword,
@@ -499,6 +570,28 @@ def test_report_keyword_shows_the_hit_and_its_source():
     assert "libapp.so" in out and "libavcodec.so" in out   # source tells them apart
     assert "NOT a shipped feature" in out                  # the caveat is the point
     assert "no matches" in _capture(feature_probe.report_keyword, [], ["nothing"])
+
+
+def test_whole_word_keyword_cli_preserves_stems_and_literal_terms():
+    from unittest.mock import patch
+    strings = [(s, "fixture.so", True) for s in
+               ("drawable", "ble scan", "éble", "ble2", "ble_name", "a+b", "aaab",
+                "x" * 210 + " ble")]
+    def run(extra):
+        with patch.object(sys, "argv", ["feature_probe.py", "fixture.apk", "--section",
+                                        "keyword", "--keyword", "ble,a+b"] + extra), \
+             patch.object(feature_probe, "collect", return_value=([], strings)):
+            return _capture(feature_probe.main)
+    default = run([])
+    assert "drawable" in default and "[ble] 6 match(es)" in default, default
+    try:
+        exact = run(["--whole-word"])
+    except SystemExit as exc:
+        raise AssertionError("--whole-word is unavailable") from exc
+    assert "[ble] 2 match(es)" in exact, exact
+    assert "drawable" not in exact and "éble" not in exact, exact
+    assert "[a+b] 1 match(es)" in exact and "fixture.so" in exact, exact
+    assert "    a+b " in exact and "aaab" not in exact, exact
 
 
 def test_binary_strings_needs_a_minimum_run():
@@ -561,6 +654,100 @@ def test_nb_frames_is_not_frame_count():
     header = src.split("frames = sample(")[0]
     assert "nb_frames')} frames" not in header
     assert re.search(r"len\(frames\)\} frames sampled", src)
+
+
+def test_capture_report_references():
+    import check_report
+    import json
+    import tempfile
+    with tempfile.TemporaryDirectory() as root:
+        rows = {
+            "manifest.json": {"session_id": "s1", "complete": True},
+            "network.jsonl": {"session_id": "s1", "request_id": "r1", "body_status": "captured", "candidate_action_ids": ["a1"]},
+            "actions.jsonl": {"session_id": "s1", "action_id": "a1"},
+        }
+        for name, row in rows.items():
+            with open(os.path.join(root, name), "w") as f:
+                json.dump(row, f)
+        locator = {"session_id": "s1", "request_id": "r1", "action_id": "a1", "body_status": "captured"}
+        report = {"evidence": [{"id": "e1", "kind": "network", "locator": locator}]}
+        assert check_report.validate_capture(report, root) == []
+        for key, bad in (("session_id", "s2"), ("request_id", "missing"), ("action_id", "missing"), ("body_status", "empty")):
+            original = locator[key]
+            locator[key] = bad
+            assert check_report.validate_capture(report, root), key
+            locator[key] = original
+
+
+def test_apk_profile_manifest_and_incomplete_set():
+    import apk_profile
+    import tempfile
+    import zipfile
+    xml = '<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="fixture.demo" android:versionCode="7"><uses-sdk android:minSdkVersion="23" android:targetSdkVersion="35"/><uses-permission android:name="android.permission.INTERNET"/><application><activity android:name=".Main"><intent-filter><action android:name="android.intent.action.MAIN"/></intent-filter></activity></application></manifest>'
+    manifest = apk_profile.parse_manifest(xml)
+    assert manifest["package"] == "fixture.demo"
+    assert manifest["components"][0]["exported"] == "unresolved"
+    assert manifest["permissions"] == ["android.permission.INTERNET"]
+    assert manifest["components"][0]["intent_filters"][0]["action"] == ["android.intent.action.MAIN"]
+    with tempfile.TemporaryDirectory() as root:
+        package = os.path.join(root, "base.apk")
+        with zipfile.ZipFile(package, "w") as archive:
+            archive.writestr("classes.dex", b"synthetic")
+            archive.writestr("lib/arm64-v8a/libflutter.so", b"synthetic")
+            archive.writestr("lib/arm64-v8a/libapp.so", b"synthetic")
+            archive.writestr("assets/flutter_assets/AssetManifest.bin", b"synthetic")
+        result = apk_profile.profile([package], expected=["base.apk", "split_config.apk"], tool=None)
+        assert result["coverage"]["missing"] == ["split_config.apk"]
+        assert result["packages"][0]["tool"]["status"] == "unavailable"
+        assert result["packages"][0]["stack_clues"][0]["name"] == "Flutter"
+        assert len(result["packages"][0]["sha256"]) == 64
+        missing_tool = apk_profile.profile([package], tool="/missing-fixture-apkanalyzer")
+        assert missing_tool["packages"][0]["status"] == "inventoried"
+        assert missing_tool["packages"][0]["tool"]["status"] == "partial"
+        damaged = os.path.join(root, "bad.apk")
+        with open(damaged, "wb") as f:
+            f.write(b"not a ZIP")
+        assert apk_profile.profile([damaged], tool=None)["packages"][0]["status"] == "invalid"
+    conflicting = [{"manifest": {"package": "a", "version_code": "1"}}, {"manifest": {"package": "a", "version_code": "2"}}]
+    assert apk_profile.identity_status(conflicting) == "conflict"
+    assert apk_profile.identity_status([{"manifest": None}]) == "unknown"
+
+
+def test_apk_optional_tool_failure_timeout_and_output_limits():
+    import apk_profile
+    result = apk_profile.run_tool([sys.executable, "-c", "raise SystemExit(3)"])
+    assert result["status"] == "failed" and result["returncode"] == 3
+    result = apk_profile.run_tool([sys.executable, "-c", "import time; time.sleep(2)"], timeout=0.05)
+    assert result["status"] == "timeout"
+    result = apk_profile.run_tool([sys.executable, "-c", "print('x'*2048)"], limit=100)
+    assert result["status"] == "truncated" and len(result["stdout"]) <= 100
+    assert apk_profile.run_tool(["/nonexistent-fixture-tool"])["status"] == "unavailable"
+    try:
+        apk_profile.parse_manifest('<!DOCTYPE manifest [<!ENTITY x "value">]><manifest/>')
+        assert False, "DTD accepted"
+    except ValueError:
+        pass
+
+
+def test_apk_empty_resource_package_does_not_trigger_invalid_queries():
+    import apk_profile
+    import tempfile
+    import zipfile
+    original = apk_profile.run_tool
+    def stub(command):
+        kind = command[1]
+        return {"command": command, "status": "ok", "stdout": '<manifest package="demo"/>' if kind == "manifest" else "", "stderr": ""}
+    with tempfile.TemporaryDirectory() as root:
+        package = os.path.join(root, "empty.apk")
+        with zipfile.ZipFile(package, "w") as z:
+            z.writestr("AndroidManifest.xml", b"synthetic stub")
+        try:
+            apk_profile.run_tool = stub
+            row = apk_profile.inventory(package, "/fixture-tool")
+        finally:
+            apk_profile.run_tool = original
+        assert [r["kind"] for r in row["tool"]["commands"]] == ["manifest", "dex", "resources"]
+        assert row["tool"]["status"] == "ok"
 
 
 if __name__ == "__main__":

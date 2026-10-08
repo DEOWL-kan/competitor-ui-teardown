@@ -133,3 +133,99 @@ test('body and stream limits expose truncation rather than silent omission', asy
     store.finish({complete:true});
   } finally {await rm(root,{recursive:true,force:true});}
 });
+
+
+test('JSONP parser never evaluates JavaScript and preserves JSON evidence only', async()=>{
+  const {Privacy}=await import('./artifacts.mjs');const p=new Privacy({allowFields:['state']});
+  assert.equal(p.body('/**/queue[0]({"state":"ready","token":"TEST-SECRET"});','text/javascript').value.state,'ready');
+  assert.equal(p.body('queue[0]({"x":(()=>{throw 1})()});','text/javascript').format,'text-shape');
+  assert.equal(p.body('queue[0]({"state":"ok"}); alert(1)','text/javascript').format,'text-shape');
+});
+
+test('Chromium decodes bounded gzip/JSONP, observes child streams and retains ID ambiguity', {timeout:60000}, async()=>{
+  const {startCapture}=await import('./capture.mjs');const {fixtureServer}=await import('./fixture_server.mjs');
+  const fixture=await fixtureServer(),root=await mkdtemp(path.join(tmpdir(),'web-deep-'));let c;
+  try {
+    c=await startCapture({out:path.join(root,'out'),bodyLimit:2048,allowFields:['state']});await c.page.goto(fixture.url);
+    await c.page.evaluate(async()=>{for(const url of ['/gzip','/gzip-large','/jsonp','/cache'])await fetch(url).then(r=>r.text());await Promise.all([fetch('/overlap'),fetch('/overlap')]);});
+    await c.page.evaluate(()=>new Promise(resolve=>{window.worker=new Worker('/stream-worker.js');worker.onmessage=resolve;}));
+    const other=fixture.url.replace('127.0.0.1','localhost')+'/stream-frame';
+    await c.page.evaluate(url=>{const f=document.createElement('iframe');f.id='cross';f.src=url;document.body.append(f);},other);
+    await c.page.frameLocator('#cross').locator('body[data-done=yes]').waitFor();
+    const another=await c.context.newPage();await another.goto(fixture.url);await another.evaluate(()=>fetch('/cache').then(r=>r.text()));
+    await c.stop();
+    const events=c.store.streams, request=suffix=>events.find(e=>e.kind==='cdp-request'&&new URL(e.url).pathname===suffix), body=suffix=>events.find(e=>e.kind==='cdp-body'&&e.request_id===request(suffix)?.request_id);
+    assert.equal(body('/gzip').body.value.state,'ready');assert.equal(body('/jsonp').body.format,'jsonp');assert.equal(body('/gzip-large').body_status,'truncated');
+    assert(request('/gzip').http_candidate_ids.length===1);assert.equal(request('/overlap').http_match,'ambiguous');
+    for(const type of ['worker','iframe']) {
+      assert(events.some(e=>e.kind==='target-attached'&&e.child_type===type),type+' attached');
+      assert(events.some(e=>e.kind==='sse'&&e.target_type===type&&e.body?.value.state==='ready'),type+' SSE');
+      assert(events.some(e=>e.kind==='websocket-frame'&&e.target_type===type&&e.direction==='received'),type+' WS');
+    }
+    assert(events.some(e=>e.kind==='cdp-response'&&e.from_disk_cache),'positive disk cache flag');
+    assert(!(await readFile(path.join(root,'out','streams.jsonl'),'utf8')).includes('TEST-SECRET'));
+  } finally {if(c)await c.stop();await fixture.close();await rm(root,{recursive:true,force:true});}
+});
+
+test('non-replaying body reads, synchronous action reservations, and shutdown draining', {timeout:60000}, async()=>{
+  const {startCapture}=await import('./capture.mjs');const {fixtureServer}=await import('./fixture_server.mjs');
+  const root=await mkdtemp(path.join(tmpdir(),'web-review-')),fixture=await fixtureServer();let c;
+  try {
+    c=await startCapture({out:path.join(root,'out'),allowFields:['state']});
+    let unsafeReads=0,entered,release;const ready=new Promise(r=>entered=r),gate=new Promise(r=>release=r);
+    c.context.on('response',response=>{
+      if(response.request().resourceType()==='stylesheet')response.body=async()=>{unsafeReads++;return Buffer.from('refetched replacement');};
+      if(response.url().endsWith('/drain')) {const original=response.body.bind(response);response.body=async()=>{entered();await gate;assert(!c.page.isClosed(),'context closed before body drain');return original();};}
+    });
+    await c.page.goto(fixture.url);
+    const duplicate=await Promise.allSettled([c.action('same',async()=>{}),c.action('same',async()=>{})]);
+    assert.equal(duplicate.filter(r=>r.status==='rejected').length,1);
+    await c.page.evaluate(()=>new Promise(resolve=>{const link=document.createElement('link');link.rel='stylesheet';link.href='/style.css';link.onload=resolve;document.head.append(link);}));
+    await c.page.evaluate(()=>fetch('/drain'));await ready;
+    const stopping=c.stop();setTimeout(release,50);await stopping;
+    assert.equal(unsafeReads,0,'Playwright body fallback must not refetch stylesheets');
+    const drain=c.store.records.find(r=>r.url.endsWith('/drain'));assert.equal(drain.body_status,'captured');
+  }finally {if(c)await c.stop();await fixture.close();await rm(root,{recursive:true,force:true});}
+});
+
+
+test('discarded stream bodies leave the HTTP budget intact', async()=>{
+  const {Artifacts}=await import('./artifacts.mjs');
+  const root=await mkdtemp(path.join(tmpdir(),'stream-budget-'));
+  try {
+    const store=new Artifacts(path.join(root,'capture'),{maxStreamEvents:1,totalLimit:8});
+    store.stream({kind:'sse'});
+    store.stream(()=>({kind:'sse',...store.body('12345678','text/plain')}));
+    assert.equal(store.bytes,0);assert.equal(store.dropped.stream_events,1);
+    assert.equal(store.body('12345678','text/plain').body_status,'captured');
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('CDP limits never give a dropped redirect the previous hop identity', async()=>{
+  const {EventEmitter}=await import('node:events');
+  const {observeCDP}=await import('./cdp_capture.mjs');
+  const {Artifacts,Privacy,DEFAULTS}=await import('./artifacts.mjs');
+  const store=Object.assign(Object.create(Artifacts.prototype),{session:'test',limits:{...DEFAULTS,maxRecords:1},privacy:new Privacy(),streams:[],records:[],bytes:0,dropped:{stream_events:0},event(){}});
+  const cdp=new EventEmitter(),pending=[];
+  cdp.send=async method=>method==='Network.getResponseBody'?{body:'{"state":"final"}',base64Encoded:false}:{};
+  await observeCDP(cdp,{store,pageId:'page-1',targetId:'page-1',active:new Set(),tasks:p=>pending.push(p)});
+  const first={requestId:'native-1',request:{url:'https://example.test/redirect',method:'GET'},wallTime:1};
+  cdp.emit('Network.requestWillBeSent',first);
+  cdp.emit('Network.requestWillBeSent',{...first,request:{url:'https://example.test/final',method:'GET'},redirectResponse:{status:302}});
+  cdp.emit('Network.responseReceived',{requestId:first.requestId,response:{status:200,mimeType:'application/json'}});
+  cdp.emit('Network.loadingFinished',{requestId:first.requestId});await Promise.all(pending);
+  assert.equal(store.dropped.stream_events,1);
+  assert.deepEqual(store.streams.map(e=>e.kind),['cdp-request']);
+});
+
+test('metadata stream events have an explicit non-body status for report references', async()=>{
+  const {Artifacts}=await import('./artifacts.mjs');
+  const root=await mkdtemp(path.join(tmpdir(),'stream-metadata-'));
+  try {
+    const store=new Artifacts(path.join(root,'out'));
+    for(const kind of ['cdp-request','cdp-response','cdp-cache','websocket-open','websocket-close']) {
+      const event=store.stream({kind,request_id:'request-1'});
+      assert.equal(event.body_status,'not_requested');assert.equal(event.body,null);
+    }
+  }finally {await rm(root,{recursive:true,force:true});}
+});

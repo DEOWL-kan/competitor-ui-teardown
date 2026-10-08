@@ -3,31 +3,35 @@ import path from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {parseArgs} from 'node:util';
 import {Artifacts, REPO} from './artifacts.mjs';
+import {observeCDP,correlateRequests} from './cdp_capture.mjs';
 export {Privacy, importHar} from './artifacts.mjs';
 
 const here=path.dirname(fileURLToPath(import.meta.url));
 process.env.PLAYWRIGHT_BROWSERS_PATH ||= path.join(here,'.browsers');
-const {chromium}=await import('playwright');
+const {chromium,firefox,webkit}=await import('playwright');
+const engines={chromium,firefox,webkit};
 const version=JSON.parse(fs.readFileSync(path.join(here,'node_modules/playwright/package.json'),'utf8')).version;
 
-export async function checkEnvironment() {
-  const browser=await chromium.launch();
+export async function checkEnvironment(browserName="chromium") {
+  if(!engines[browserName])throw Error("Unknown browser engine");
+  const browser=await engines[browserName].launch();
   try {
     const context=await browser.newContext(); const page=await context.newPage();
-    const cdp=await context.newCDPSession(page); await cdp.send('Network.enable');
-    return {node:process.version,playwright:version,chromium:browser.version(),cdp_network:true};
+    if(browserName==='chromium'){const cdp=await context.newCDPSession(page);await cdp.send('Network.enable');}
+    return {node:process.version,playwright:version,browser:browserName,browser_version:browser.version(),cdp_network:browserName==='chromium'};
   } finally {await browser.close();}
 }
 
-export async function startCapture({out,headless=true,viewport={width:1280,height:800},selector="body",...options}) {
+export async function startCapture({out,browserName="chromium",headless=true,viewport={width:1280,height:800},selector="body",...options}) {
+  if(!engines[browserName])throw Error("Unknown browser engine");
   const store=new Artifacts(out,options);
   let browser;
-  try {browser=await chromium.launch({headless});}
+  try {browser=await engines[browserName].launch({headless,...(browserName==="chromium"?{args:["--site-per-process"]}:{})});}
   catch(error) {store.finish({error:'Browser launch failed: '+error.name});throw error;}
   let context;
   try {context=await browser.newContext({viewport});}
   catch(error){await browser.close();store.finish({error:'Context creation failed: '+error.name});throw error;}
-  const requests=new Map(), pages=new Map(), frames=new Map(), pending=new Set(), active=new Set();
+  const requests=new Map(), pages=new Map(), frames=new Map(), pending=new Set(), active=new Set(), reservedActions=new Set();
   let next=0, accepting=true, stopped=false;
   const pageId=page=>{if(!pages.has(page)) pages.set(page,'page-'+(pages.size+1));return pages.get(page);};
   const frameId=frame=>{if(!frames.has(frame)) frames.set(frame,'frame-'+(frames.size+1));return frames.get(frame);};
@@ -35,14 +39,16 @@ export async function startCapture({out,headless=true,viewport={width:1280,heigh
   const privacy=store.privacy;
   const elapsed=()=>performance.now()-started;
   const started=performance.now();
-  store.manifest.backend='playwright-chromium';store.manifest.versions={node:process.version,playwright:version,chromium:browser.version()};
+  store.manifest.backend='playwright-'+browserName;store.manifest.versions={node:process.version,playwright:version,[browserName]:browser.version()};
+  store.manifest.capabilities={http:true,websocket:true,cdp:browserName==='chromium',native_eventsource:browserName==='chromium',child_target_streams:browserName==='chromium'};
   store.manifest.limitations=[
     'Action candidates are time-window correlations, never proven ownership.',
-    'HTTP is observed at context level; CDP streaming/initiator events only cover attached page targets. Worker/OOPIF streaming may be absent.',
+    'Chromium CDP observes page/worker/OOPIF targets; attachment temporarily pauses new child targets. Detached/failed targets are explicit gaps. Service-worker and shared-worker streams are not guaranteed.',
     'Popup HTTP is observed by context; initial popup CDP events can precede attachment.',
-    'Response bodies with unknown decoded size, compression, binary MIME or excessive size are skipped. Fetch streams are not captured incrementally.',
+    'Chromium CDP separately captures bounded decoded bodies including gzip/JSONP. HTTP and CDP identities are metadata candidates, not exact joins. Firefox/WebKit have no CDP or native EventSource payload capture. Fetch streams are not captured incrementally.',
     'URL paths, allow-listed values, CSS and screenshots require manual privacy review. No personal profile or cookies are imported.'
   ];
+  store.write('manifest.json',store.manifest);
   context.on('request',request=>{
     if(!accepting)return;
     if(store.records.length>=store.limits.maxRecords){store.dropped.requests++;return;}
@@ -79,6 +85,7 @@ export async function startCapture({out,headless=true,viewport={width:1280,heigh
       if(request.method()==='HEAD'||[204,304].includes(response.status())) {row.body_status='empty';row.reason='no response body for method/status';}
       else if(response.status()>=300&&response.status()<400){row.body_status='not_requested';row.reason='redirect body omitted';}
       else if(!/json|text\//i.test(mime)||/event-stream/i.test(mime)){row.body_status='not_requested';row.reason='binary or streaming body';}
+      else if(browserName==='chromium'&&(!['fetch','xhr'].includes(request.resourceType())||((await request.allHeaders())['sec-purpose']||'').startsWith('prefetch'))){row.body_status='not_requested';row.reason='use direct CDP body; Playwright fallback may refetch this resource';}
       else if(headers['content-encoding']&&!/^identity$/i.test(headers['content-encoding'])){row.body_status='unavailable';row.reason='compressed decoded size cannot be bounded';}
       else if(!/^\d+$/.test(headers['content-length']||'')){row.body_status='unavailable';row.reason='unknown decoded body size';}
       else if(Number(headers['content-length'])>store.limits.bodyLimit){row.body_status='truncated';row.reason='declared size exceeds body limit';}
@@ -95,24 +102,20 @@ export async function startCapture({out,headless=true,viewport={width:1280,heigh
   });
   async function attach(page) {
     const id=pageId(page);
+    if(browserName!=='chromium') {
+      let nextSocket=0;
+      page.on('websocket',socket=>{
+        const request_id=id+':ws:'+ ++nextSocket;
+        const emit=value=>store.stream(()=>({page_id:id,target_type:'page',request_id,...(typeof value==='function'?value():value)}));
+        emit({kind:'websocket-open',url:privacy.url(socket.url())});
+        for(const [event,direction] of [['framesent','sent'],['framereceived','received']])socket.on(event,frame=>emit(()=>({kind:'websocket-frame',direction,...(typeof frame.payload==='string'?store.body(frame.payload,'application/json'):{body_status:'not_requested',body:null,reason:'binary frame'})})));
+        socket.on('close',()=>emit({kind:'websocket-close'}));
+        socket.on('socketerror',()=>emit({kind:'websocket-error',reason:'browser reported socket error'}));
+      });return true;
+    }
     try {
-      const cdp=await context.newCDPSession(page);const urls=new Map();
-      const streamId=requestId=>id+':cdp:'+requestId;
-      cdp.on('Network.requestWillBeSent',e=>{
-        if(store.streams.length>=store.limits.maxStreamEvents){store.dropped.stream_events++;return;}
-        urls.set(e.requestId,privacy.url(e.request.url));
-        store.stream({kind:'cdp-request',page_id:id,request_id:streamId(e.requestId),url:privacy.url(e.request.url),timestamp:e.timestamp,initiator_type:e.initiator?.type||'unknown',initiator_frames:(e.initiator?.stack?.callFrames||[]).slice(0,8).map(f=>({url:privacy.url(f.url),line:f.lineNumber,column:f.columnNumber})),candidate_action_ids:[...active],association:active.size?'time-window-candidate':'unassigned'});
-      });
-      cdp.on('Network.responseReceived',e=>store.stream({kind:'cdp-response',page_id:id,request_id:streamId(e.requestId),status:e.response.status,from_disk_cache:e.response.fromDiskCache??null,from_service_worker:e.response.fromServiceWorker??null}));
-      cdp.on('Network.webSocketCreated',e=>{urls.set(e.requestId,privacy.url(e.url));store.stream({kind:'websocket-open',page_id:id,request_id:streamId(e.requestId),url:privacy.url(e.url)});});
-      for(const [name,direction] of [['webSocketFrameSent','sent'],['webSocketFrameReceived','received']]) cdp.on('Network.'+name,e=>{
-        const frame=e.response;const data=frame.opcode===1?store.body(frame.payloadData,'application/json'):{body_status:'not_requested',reason:'binary/control frame',body:null};
-        store.stream({kind:'websocket-frame',page_id:id,request_id:streamId(e.requestId),direction,opcode:frame.opcode,timestamp:e.timestamp,...data});
-      });
-      cdp.on('Network.webSocketClosed',e=>store.stream({kind:'websocket-close',page_id:id,request_id:streamId(e.requestId),timestamp:e.timestamp}));
-      cdp.on('Network.webSocketFrameError',e=>store.stream({kind:'websocket-error',page_id:id,request_id:streamId(e.requestId),reason:'browser reported frame error'}));
-      cdp.on('Network.eventSourceMessageReceived',e=>store.stream({kind:'sse',page_id:id,request_id:streamId(e.requestId),url:urls.get(e.requestId)||null,event_name:privacy.mask(e.eventName),event_id:privacy.mask(e.eventId),timestamp:e.timestamp,...store.body(e.data,'application/json')}));
-      await cdp.send('Network.enable',{maxTotalBufferSize:store.limits.totalLimit,maxResourceBufferSize:store.limits.bodyLimit});
+      const cdp=await context.newCDPSession(page);
+      await observeCDP(cdp,{store,pageId:id,targetId:id,active,tasks});
       return true;
     } catch(error) {store.event({kind:'diagnostic',page_id:id,error:'CDP attach unavailable: '+error.name});return false;}
   }
@@ -134,7 +137,8 @@ export async function startCapture({out,headless=true,viewport={width:1280,heigh
     } catch(error) {store.event({kind:'diagnostic',error:'snapshot unavailable: '+error.name});return null;}
   }
   async function action(id,run,{target=page,description=id}={}) {
-    if(typeof id!=='string'||!id||store.actions.some(a=>a.action_id===id))throw Error('Action ID must be unique');
+    if(typeof id!=='string'||!id||reservedActions.has(id))throw Error('Action ID must be unique');
+    reservedActions.add(id);
     const row={session_id:store.session,action_id:id,description,page_id:pageId(target),before:await snapshot(target),started_at:new Date().toISOString(),start_ms:elapsed(),status:'running'};
     store.actions.push(row);active.add(id);store.event({kind:'action-start',...row});
     try {await run(target);row.status='completed';}
@@ -144,7 +148,7 @@ export async function startCapture({out,headless=true,viewport={width:1280,heigh
   }
   async function stop() {
     if(stopped)return store;stopped=true;accepting=false;
-    try {await context.close();await Promise.all([...pending]);store.finish({complete:true});}
+    try {await Promise.all([...pending]);await context.close();while(pending.size)await Promise.all([...pending]);correlateRequests(store);store.finish({complete:true});}
     finally {await browser.close();}
     return store;
   }
@@ -167,8 +171,8 @@ export function validateJob(job) {
 }
 
 async function main() {
-  const {values}=parseArgs({options:{check:{type:'boolean'},job:{type:'string'},'import-har':{type:'string'},out:{type:'string'}}});
-  if(values.check){console.log(JSON.stringify(await checkEnvironment()));return;}
+  const {values}=parseArgs({options:{check:{type:'boolean'},job:{type:'string'},'import-har':{type:'string'},out:{type:'string'},browser:{type:'string'}}});
+  if(values.check){console.log(JSON.stringify(await checkEnvironment(values.browser)));return;}
   if(values['import-har']){
     const {importHar}=await import('./artifacts.mjs');
     if(fs.statSync(values['import-har']).size>32*1024*1024)throw Error('HAR exceeds 32 MiB');
@@ -179,7 +183,7 @@ async function main() {
   if(fs.statSync(values.job).size>1024*1024)throw Error('Job exceeds 1 MiB');
   const job=JSON.parse(fs.readFileSync(values.job,'utf8'));
   validateJob(job);
-  const capture=await startCapture({...job,out:values.out||job.out});
+  const capture=await startCapture({...job,browserName:values.browser||job.browserName,out:values.out||job.out});
   try {
     await capture.action('navigate',page=>page.goto(job.url,{waitUntil:'domcontentloaded',timeout:30000}));
     for(const [index,step] of job.steps.entries()) await capture.action(step.id||'step-'+index,async page=>{

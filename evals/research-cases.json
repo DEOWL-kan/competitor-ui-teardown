@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "purpose": "Manual research-reasoning cases; not a completed model evaluation",
+  "purpose": "Research-reasoning rubric; actual run results and scope are recorded in validation-2026-10-08.md",
   "cases": [
     {
       "id": "document-runtime-conflict",

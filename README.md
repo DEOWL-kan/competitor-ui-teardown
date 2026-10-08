@@ -267,3 +267,5 @@ The checker validates structure and evidence references, not factual truth. The 
 
 
 Examples: [Web screen and feature](examples/web/wikipedia-case.md), [three-reference comparison](examples/comparison/search-brief.md), [synthetic Web flow](examples/web/feature-report.md), [Android static trace](examples/android-fixture/README.md).
+
+Device-free follow-up validation covers Chromium worker/OOPIF streams and decoded JSONP, Firefox/WebKit HTTP/WS and DOM probes, plus actual model routing cases. See the [dated validation record](evals/validation-2026-10-08.md) for results and limits. Physical Android runtime remains unverified.

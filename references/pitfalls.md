@@ -719,3 +719,21 @@ WARNING: -T  invalid, setting to 1
 - JADX 1.5.6 对破损 classes.dex 打 ERROR，但返回 0，仅有 R.java 等资源产物。判据必须包括日志、预期类和方法，不是进程码；`tools/test_android_integration.py` 用自制损坏包复现。没有读到代码是 coverage unavailable，不能称功能不存在。
 
 - multipart 的 request.postData() 在本轮真实文件上传中返回 null；旧判断顺序误记 empty。先按 MIME 识别不采集文件正文，再判断 JSON/表单是否为空，上传现在为 not_requested。真实 Chromium 回归先失败，修复后通过，恢复旧顺序的唯一目标变异再次失败。
+
+## Web / package review findings (2026-10-08, synthetic regression cases)
+
+Independent review found six defects, corrected with unique-target mutation checks:
+
+- Playwright's Chromium response reader can reload certain empty GET resource bodies with credentials. The collector now avoids fallback-eligible readers and uses direct bounded CDP retrieval for these bodies. The stylesheet response-reader spy must remain at zero calls; never label a refetched body as the original.
+- Closing the browser context before draining finished responses loses available bodies. A deliberately delayed body reader must finish while the page is still open, and remain captured after stop.
+- Two concurrent actions could reserve the same ID while awaiting their first snapshot. Reserve IDs synchronously; exactly one duplicate call must reject.
+- Discarded stream events charged the shared body budget. Construct body payloads lazily after the event-cap check, including WS/SSE/CDP and portable WS; a dropped 8-byte frame must leave all 8 bytes available to HTTP.
+- A string candidate_action_ids allowed substring membership to masquerade as an action reference. Require an array of nonempty strings; prefix-a1-suffix must not match action a1.
+- Deduplicating expected APK names erased ambiguity. Preserve the duplicate-name signal before normalization; two expected base.apk entries are not one verified complete split set.
+
+Each mutation asserts exactly one replacement and fails the corresponding regression. New decoded-body support also closes the earlier Wikipedia JSONP gap in a separate capture; it does not retroactively change the original unavailable record.
+
+Final review found two further boundary failures, reproduced before the fixes:
+
+- At maxRecords=1, CDP reuses a native ID for a redirect. Dropping the new request left the old URL attached to the final response/body. Invalidate the old entry when dropping that event, retaining its budget slot; the sample now records only the original request, never a final body under the wrong hop.
+- Metadata-only stream events lacked body_status, so a legitimate initiator/cache/handshake reference could not satisfy report validation. All accepted stream events now default to not_requested with null body, overridden only by explicit body results. Metadata is neither empty nor captured.
